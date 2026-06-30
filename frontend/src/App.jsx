@@ -44,6 +44,8 @@ export default function App() {
       } else {
         setUser(null);
         setDbStatus('connected');
+        // Fetch initial CSRF token for guest actions (Login/Register)
+        await fetch('/api/auth/csrf-token');
       }
     } catch (err) {
       console.error('Error checking authentication status:', err);

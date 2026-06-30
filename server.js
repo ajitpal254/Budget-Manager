@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const apiRoutes = require('./routes/api');
-const { parseCookies } = require('./middleware/auth');
+const { parseCookies, rateLimitMiddleware, csrfMiddleware } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -64,7 +64,9 @@ app.use((req, res, next) => {
 // Serve frontend static assets from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API routes
+// Secure API routes with rate limiter and CSRF middlewares
+app.use('/api', rateLimitMiddleware());
+app.use('/api', csrfMiddleware);
 app.use('/api', apiRoutes);
 
 // Catch-all route to serve the SPA

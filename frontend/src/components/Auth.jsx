@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
 
+const getCookie = (name) => {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return '';
+};
+
 export default function Auth({ onAuthSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
   const [name, setName] = useState('');
@@ -19,7 +26,10 @@ export default function Auth({ onAuthSuccess }) {
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrfToken')
+        },
         body: JSON.stringify(payload)
       });
 

@@ -52,19 +52,38 @@ const clearAuthCookies = (res) => {
 
 // --- AUTH ROUTES ---
 
+// GET /api/auth/csrf-token (Public endpoint to acquire token for login/register POSTs)
+router.get('/auth/csrf-token', (req, res) => {
+  const csrfToken = generateToken();
+  const isProd = process.env.NODE_ENV === 'production';
+  
+  res.cookie('csrfToken', csrfToken, {
+    secure: isProd,
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  });
+
+  res.json({ csrfToken });
+});
+
 // POST /api/auth/register
 router.post('/auth/register', asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
 
+  // Strict type verification to prevent NoSQL query injection attacks
+  if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Invalid input format' });
+  }
+
   // Validation
-  if (!name || typeof name !== 'string' || !name.trim()) {
+  if (!name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
-  if (!email || typeof email !== 'string' || !email.trim()) {
+  if (!email.trim()) {
     return res.status(400).json({ error: 'Email is required' });
   }
-  if (!password || typeof password !== 'string' || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  if (password.length < 12) {
+    return res.status(400).json({ error: 'Password must be at least 12 characters long' });
   }
 
   const normalizedEmail = email.toLowerCase().trim();
@@ -112,8 +131,8 @@ router.post('/auth/register', asyncHandler(async (req, res) => {
 router.post('/auth/login', asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  if (typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Invalid input format' });
   }
 
   const user = await User.findOne({ email: email.toLowerCase().trim() });
@@ -152,7 +171,6 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
 
 // POST /api/auth/logout
 router.post('/auth/logout', asyncHandler(async (req, res) => {
-  // If user has a session cookie, try to destroy it in the db
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies['sessionToken'];
   if (token) {
@@ -186,6 +204,11 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
 
 router.post('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   const { description, amount, type, category, date } = req.body;
+  
+  if (typeof description !== 'string' || typeof category !== 'string' || typeof type !== 'string') {
+    return res.status(400).json({ error: 'Invalid input fields format' });
+  }
+
   const transaction = new Transaction({
     userId: req.user._id,
     description,
@@ -202,6 +225,10 @@ router.put('/transactions/:id', authMiddleware, asyncHandler(async (req, res) =>
   const { id } = req.params;
   const { description, amount, type, category, date } = req.body;
   
+  if (typeof description !== 'string' || typeof category !== 'string' || typeof type !== 'string') {
+    return res.status(400).json({ error: 'Invalid input fields format' });
+  }
+
   const updated = await Transaction.findOneAndUpdate(
     { _id: id, userId: req.user._id },
     { description, amount, type, category, date },
@@ -263,6 +290,11 @@ router.get('/goals', authMiddleware, asyncHandler(async (req, res) => {
 
 router.post('/goals', authMiddleware, asyncHandler(async (req, res) => {
   const { name, target, current, deadline } = req.body;
+  
+  if (typeof name !== 'string') {
+    return res.status(400).json({ error: 'Invalid name format' });
+  }
+
   const goal = new Goal({
     userId: req.user._id,
     name,
@@ -278,6 +310,10 @@ router.put('/goals/:id', authMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name, target, current, deadline } = req.body;
   
+  if (typeof name !== 'string') {
+    return res.status(400).json({ error: 'Invalid name format' });
+  }
+
   const updated = await Goal.findOneAndUpdate(
     { _id: id, userId: req.user._id },
     { name, target, current, deadline },
