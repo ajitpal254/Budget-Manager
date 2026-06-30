@@ -118,7 +118,8 @@ async function runMigrations() {
   }
 }
 
-// Bind server strictly to loopback interface 127.0.0.1
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Budget Manager server running on http://127.0.0.1:${PORT}`);
+// Bind server strictly to loopback interface 127.0.0.1 in dev/testing, bind to 0.0.0.0 in prod
+const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
+app.listen(PORT, host, () => {
+  console.log(`Budget Manager server running on http://${host}:${PORT}`);
 });
