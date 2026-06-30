@@ -1,0 +1,15 @@
+# Render Infrastructure-as-Code Configuration for Backend Deployment
+services:
+  - type: web
+    name: budget-manager-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false # Set manually in the Render dashboard to your MongoDB cluster connection string
+      - key: FRONTEND_URL
+        sync: false # Set manually in the Render dashboard to your Netlify deployment URL (e.g., https://your-site.netlify.app)

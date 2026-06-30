@@ -1,0 +1,8 @@
+# Netlify Configuration File for Frontend Deployment
+[build]
+  base = "frontend"
+  command = "npm run build:netlify"
+  publish = "../public"
+
+[build.environment]
+  NODE_VERSION = "20"
