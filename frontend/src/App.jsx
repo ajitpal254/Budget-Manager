@@ -366,12 +366,13 @@ export default function App() {
         <header className="top-bar">
           <h1>{getPageTitle()}</h1>
           <div className="action-group" style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="btn btn-primary" onClick={() => setTxModal({ open: true, mode: 'add', data: null })}>
+            <button className="btn btn-primary" onClick={() => setTxModal({ open: true, mode: 'add', data: null })} title="Add Transaction">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              Add Transaction
+              <span className="btn-text-desktop">Add Transaction</span>
             </button>
-            <button className="btn btn-secondary mobile-logout-btn" onClick={handleLogout}>
-              Sign Out
+            <button className="btn btn-secondary mobile-logout-btn" onClick={handleLogout} title="Sign Out">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              <span className="btn-text-desktop">Sign Out</span>
             </button>
           </div>
         </header>
