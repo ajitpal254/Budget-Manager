@@ -80,7 +80,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'An internal server error occurred.' });
 });
 
-// Self-contained migration script to assign existing records to the default user
+// Self-contained migration script to assign orphaned records to a seeded user.
+//
+// SECURITY: The seed user is DISABLED by default. It only runs when explicitly
+// enabled via SEED_DEFAULT_USER=true, and credentials must come from the
+// SEED_USER_EMAIL / SEED_USER_PASSWORD environment variables — never hardcoded
+// (a previous version created a user with a publicly visible password).
 async function runMigrations() {
   try {
     const User = require('./models/User');
@@ -89,29 +94,46 @@ async function runMigrations() {
     const Goal = require('./models/Goal');
     const crypto = require('crypto');
 
-    // 1. Create Default User (Ajit Pal)
-    let user = await User.findOne({ email: 'testingpurposeap@gmail.com' });
-    if (!user) {
-      console.log('Migration: Creating default user Ajit Pal...');
-      const salt = crypto.randomBytes(16).toString('hex');
-      const hash = crypto.pbkdf2Sync('Qwerty1234', salt, 1000, 64, 'sha512').toString('hex');
-      user = new User({
-        name: 'Ajit Pal',
-        email: 'testingpurposeap@gmail.com',
-        passwordHash: hash,
-        passwordSalt: salt
-      });
-      await user.save();
-      console.log('Migration: Default user created successfully.');
+    let user = null;
+
+    // 1. Optional one-time seed user (opt-in only)
+    if (process.env.SEED_DEFAULT_USER === 'true') {
+      const seedEmail = (process.env.SEED_USER_EMAIL || '').toLowerCase().trim();
+      const seedPassword = process.env.SEED_USER_PASSWORD || '';
+
+      if (!seedEmail || seedPassword.length < 12) {
+        console.warn('Migration: SEED_DEFAULT_USER=true but SEED_USER_EMAIL / SEED_USER_PASSWORD (min 12 chars) are not set. Skipping seed.');
+      } else {
+        user = await User.findOne({ email: seedEmail });
+        if (!user) {
+          console.log('Migration: Creating seed user...');
+          const salt = crypto.randomBytes(16).toString('hex');
+          const hash = crypto.pbkdf2Sync(seedPassword, salt, 310000, 64, 'sha512').toString('hex');
+          user = new User({
+            name: 'Seeded User',
+            email: seedEmail,
+            passwordHash: hash,
+            passwordSalt: salt,
+            hashIterations: 310000
+          });
+          await user.save();
+          console.log('Migration: Seed user created successfully.');
+        }
+      }
     }
 
-    // 2. Assign Orphaned Records to Default User
+    // 2. Assign orphaned records to the seeded user (only when one exists)
+    if (!user) {
+      console.log('Migration: No seed user configured; skipping orphan-record assignment.');
+      return;
+    }
+
     const resultTx = await Transaction.updateMany({ userId: { $exists: false } }, { $set: { userId: user._id } });
     const resultBudget = await Budget.updateMany({ userId: { $exists: false } }, { $set: { userId: user._id } });
     const resultGoal = await Goal.updateMany({ userId: { $exists: false } }, { $set: { userId: user._id } });
 
     if (resultTx.modifiedCount > 0 || resultBudget.modifiedCount > 0 || resultGoal.modifiedCount > 0) {
-      console.log(`Migration complete: Assigned ${resultTx.modifiedCount} transactions, ${resultBudget.modifiedCount} budgets, and ${resultGoal.modifiedCount} goals to user Ajit Pal.`);
+      console.log(`Migration complete: Assigned ${resultTx.modifiedCount} transactions, ${resultBudget.modifiedCount} budgets, and ${resultGoal.modifiedCount} goals to seed user.`);
     } else {
       console.log('Migration: No orphaned records to assign.');
     }

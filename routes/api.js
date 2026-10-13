@@ -15,8 +15,13 @@ const asyncHandler = fn => (req, res, next) => {
 };
 
 // Cryptographic helpers
-const hashPassword = (password, salt) => {
-  return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+// OWASP recommends >= 310,000 iterations for PBKDF2-HMAC-SHA512.
+const PBKDF2_ITERATIONS = 310000;
+// Iteration count used before the hardening upgrade; kept so legacy hashes
+// can still be verified (and upgraded on next successful login).
+const LEGACY_PBKDF2_ITERATIONS = 1000;
+const hashPassword = (password, salt, iterations = PBKDF2_ITERATIONS) => {
+  return crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
 };
 
 const generateSalt = () => {
@@ -31,16 +36,22 @@ const generateToken = () => {
 const setAuthCookies = (res, sessionToken, csrfToken) => {
   const isProd = process.env.NODE_ENV === 'production';
   
+  // In production the frontend is served from a different origin (e.g. Netlify)
+  // than the API (e.g. Render), so cookies must be SameSite=None; Secure to be
+  // sent with cross-origin fetch requests. 'lax' is fine (and safer) for the
+  // same-origin local dev setup.
+  const sameSite = isProd ? 'none' : 'lax';
+
   res.cookie('sessionToken', sessionToken, {
     httpOnly: true,
     secure: isProd,
-    sameSite: 'lax',
+    sameSite,
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 
   res.cookie('csrfToken', csrfToken, {
     secure: isProd,
-    sameSite: 'lax',
+    sameSite,
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 };
@@ -59,7 +70,8 @@ router.get('/auth/csrf-token', (req, res) => {
   
   res.cookie('csrfToken', csrfToken, {
     secure: isProd,
-    sameSite: 'lax',
+    // Must match setAuthCookies: cross-origin frontend needs SameSite=None in prod.
+    sameSite: isProd ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
@@ -99,7 +111,8 @@ router.post('/auth/register', asyncHandler(async (req, res) => {
     name: name.trim(),
     email: normalizedEmail,
     passwordHash: hash,
-    passwordSalt: salt
+    passwordSalt: salt,
+    hashIterations: PBKDF2_ITERATIONS
   });
   await newUser.save();
 
@@ -141,9 +154,21 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  const computedHash = hashPassword(password, user.passwordSalt);
+  // Verify against the iteration count this account's hash was created with,
+  // so hashes made before the hardening upgrade still validate.
+  const iterations = user.hashIterations || LEGACY_PBKDF2_ITERATIONS;
+  const computedHash = hashPassword(password, user.passwordSalt, iterations);
   if (computedHash !== user.passwordHash) {
     return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  // Transparently upgrade legacy/weak hashes to the current iteration count
+  // on successful login.
+  if (iterations < PBKDF2_ITERATIONS) {
+    user.passwordSalt = generateSalt();
+    user.passwordHash = hashPassword(password, user.passwordSalt);
+    user.hashIterations = PBKDF2_ITERATIONS;
+    await user.save();
   }
 
   const sessionToken = generateToken();

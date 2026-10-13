@@ -1,11 +1,5 @@
 import React, { useState } from 'react';
-
-const getCookie = (name) => {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-  return '';
-};
+import { apiFetch, getCookie } from '../api.js';
 
 export default function Auth({ onAuthSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -24,7 +18,7 @@ export default function Auth({ onAuthSuccess }) {
     const payload = isRegister ? { name, email, password } : { email, password };
 
     try {
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
