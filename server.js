@@ -118,6 +118,22 @@ async function runMigrations() {
           });
           await user.save();
           console.log('Migration: Seed user created successfully.');
+        } else {
+          // User already exists (e.g. created by an older version): refresh the
+          // password from env when it differs, so .env stays the source of truth.
+          const iterations = user.hashIterations || 1000;
+          const currentHash = crypto.pbkdf2Sync(seedPassword, user.passwordSalt, iterations, 64, 'sha512').toString('hex');
+          if (currentHash !== user.passwordHash) {
+            console.log('Migration: Seed user exists — updating password from env...');
+            const salt = crypto.randomBytes(16).toString('hex');
+            user.passwordSalt = salt;
+            user.passwordHash = crypto.pbkdf2Sync(seedPassword, salt, 310000, 64, 'sha512').toString('hex');
+            user.hashIterations = 310000;
+            await user.save();
+            console.log('Migration: Seed user password updated.');
+          } else {
+            console.log('Migration: Seed user already up to date.');
+          }
         }
       }
     }
