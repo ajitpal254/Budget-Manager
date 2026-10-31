@@ -85,7 +85,7 @@ const HOWTOS = [
   {
     keys: ['receipt', 'photo', 'picture', 'scan'],
     answer:
-      'To attach a receipt, open the Add/Edit transaction form and use the Attach receipt field — you can take a photo right from your phone. The photo is compressed on your device before upload. In the ledger, a receipt icon on a row opens the full image.',
+      'To attach a receipt, open the Add/Edit transaction form and use the Attach receipt field — you can take a photo right from your phone. The app reads the photo and autofills the merchant, amount, date and a suggested category (always verify before saving). The photo is compressed on your device before upload. In the ledger, a receipt icon on a row opens the full image.',
   },
   {
     keys: ['delete'],
