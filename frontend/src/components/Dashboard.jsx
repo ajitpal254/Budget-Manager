@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import TrendsChart from './TrendsChart';
+import InsightsCard from './InsightsCard';
 import { computeBudgetStatus } from '../budgetAlerts.js';
+import { generateInsights } from '../insights.js';
 
 const categoryColors = [
   '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
@@ -23,6 +25,12 @@ export default function Dashboard({ transactions, budgets = [], formatCurrency, 
   const budgetAlerts = computeBudgetStatus(budgets, transactions, warningPct, dangerPct)
     .filter(s => s.status !== 'ok')
     .sort((a, b) => b.percent - a.percent);
+
+  // Smart insights: cost-cutting suggestions computed from the user's own data.
+  const insights = useMemo(
+    () => generateInsights(transactions, budgets),
+    [transactions, budgets]
+  );
 
   // Chart math
   const expenseTransactions = transactions.filter(t => t.type === 'expense');
@@ -117,6 +125,9 @@ export default function Dashboard({ transactions, budgets = [], formatCurrency, 
           </ul>
         </div>
       )}
+
+      {/* Smart insights: cost-cutting suggestions */}
+      <InsightsCard insights={insights} />
 
       {/* Main Charts / List Grid */}
       <div className="dashboard-grid">
