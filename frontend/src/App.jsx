@@ -20,6 +20,9 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [goals, setGoals] = useState([]);
+  // Bumped after every transaction mutation so the Transactions ledger
+  // (which pages on the server) refetches its current page.
+  const [txRefreshKey, setTxRefreshKey] = useState(0);
   const [dbStatus, setDbStatus] = useState('connecting');
 
   // Modals state
@@ -166,6 +169,7 @@ export default function App() {
       if (txRes.ok) {
         txs = await txRes.json();
         setTransactions(txs);
+        setTxRefreshKey(k => k + 1);
       }
 
       if (budgetRes.ok) {
@@ -622,6 +626,7 @@ export default function App() {
                   formatDate={formatDate}
                   onEdit={handleTxEditTrigger}
                   onDelete={handleTxDelete}
+                  refreshKey={txRefreshKey}
                 />
               </ErrorBoundary>
             )}
