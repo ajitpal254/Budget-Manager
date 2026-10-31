@@ -58,10 +58,12 @@ app.use((req, res, next) => {
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Content-Security-Policy', 
     "default-src 'self'; " +
-    "script-src 'self'; " + // No unsafe-inline for scripts
+    "script-src 'self' https://cdn.jsdelivr.net; " + // tesseract.js OCR core (lazy-loaded)
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " + // Google fonts style
     "font-src 'self' https://fonts.gstatic.com; " +
-    "img-src 'self' data:;"
+    "img-src 'self' data:; " +
+    "connect-src 'self' https://cdn.jsdelivr.net; " + // tesseract.js language data
+    "worker-src 'self' blob:;" // tesseract.js OCR runs in a blob worker
   );
   next();
 });

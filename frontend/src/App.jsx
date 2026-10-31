@@ -12,6 +12,8 @@ import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from
 import { apiFetch, getCookie } from './api.js';
 import { queuedApiFetch, replayOutbox } from './offlineQueue.js';
 import { compressReceiptImage } from './receipt.js';
+import { readReceiptText } from './receiptOcr.js';
+import { parseReceiptText } from './receiptParser.js';
 import Assistant from './components/Assistant';
 
 export default function App() {
@@ -49,6 +51,14 @@ export default function App() {
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptPreview, setReceiptPreview] = useState(null);
   const [receiptRemoved, setReceiptRemoved] = useState(false);
+  // Receipt OCR: reads an attached receipt photo and autofills the form.
+  // idle | reading | done | failed. All OCR results are suggestions — the
+  // user always verifies before saving.
+  const [ocrState, setOcrState] = useState({ status: 'idle', progress: 0 });
+  const [ocrHint, setOcrHint] = useState('');
+  // Ref to the transaction form so OCR can autofill fields imperatively
+  // (the inputs are uncontrolled).
+  const txFormRef = useRef(null);
 
   // Reset receipt staging whenever the transaction modal opens; revoke the
   // preview URL when it closes to avoid leaking object URLs.
@@ -56,6 +66,8 @@ export default function App() {
     if (txModal.open) {
       setReceiptFile(null);
       setReceiptRemoved(false);
+      setOcrState({ status: 'idle', progress: 0 });
+      setOcrHint('');
       setReceiptPreview((prev) => {
         if (prev) URL.revokeObjectURL(prev);
         return null;
@@ -333,6 +345,49 @@ export default function App() {
   };
 
   // --- TRANSACTION CRUD ---
+  // Read a receipt photo with on-device OCR and autofill the transaction
+  // form. Fire-and-forget: never blocks the form, and any failure just
+  // leaves manual entry. Only non-null parsed fields are filled, and the
+  // user verifies everything before saving.
+  const runReceiptOcr = (blob) => {
+    setOcrState({ status: 'reading', progress: 0 });
+    setOcrHint('');
+    readReceiptText(blob, (p) => setOcrState({ status: 'reading', progress: p }))
+      .then((text) => {
+        const parsed = parseReceiptText(text);
+        const form = txFormRef.current;
+        const filled = [];
+        if (form) {
+          if (parsed.merchant) {
+            form.elements.description.value = parsed.merchant;
+            filled.push('description');
+          }
+          if (parsed.amount != null) {
+            form.elements.amount.value = parsed.amount.toFixed(2);
+            filled.push('amount');
+          }
+          if (parsed.category) {
+            form.elements.category.value = parsed.category;
+            filled.push('category');
+          }
+          if (parsed.date) {
+            form.elements.date.value = parsed.date;
+            filled.push('date');
+          }
+        }
+        if (filled.length) {
+          setOcrState({ status: 'done', progress: 100 });
+          setOcrHint('✨ Filled from receipt — please verify.');
+        } else {
+          setOcrState({ status: 'failed', progress: 0 });
+        }
+      })
+      .catch((err) => {
+        console.error('Receipt OCR failed:', err);
+        setOcrState({ status: 'failed', progress: 0 });
+      });
+  };
+
   const handleReceiptChange = async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
@@ -341,6 +396,8 @@ export default function App() {
       pushToast('error', 'Please choose a photo file.');
       return;
     }
+    setOcrState({ status: 'idle', progress: 0 });
+    setOcrHint('');
     try {
       const compressed = await compressReceiptImage(file);
       setReceiptPreview((prev) => {
@@ -349,6 +406,8 @@ export default function App() {
       });
       setReceiptFile(compressed);
       setReceiptRemoved(false);
+      // Read the receipt in the background and suggest form values.
+      runReceiptOcr(compressed);
     } catch (err) {
       console.error('Receipt compression failed:', err);
       pushToast('error', 'Could not read that image.');
@@ -868,7 +927,7 @@ export default function App() {
             <h3>{txModal.mode === 'edit' ? 'Edit Transaction' : 'Add Transaction'}</h3>
             <button className="btn-close" onClick={() => setTxModal({ open: false, mode: 'add', data: null })}>&times;</button>
           </div>
-          <form onSubmit={handleTxSubmit}>
+          <form onSubmit={handleTxSubmit} ref={txFormRef}>
             <input type="hidden" name="id" defaultValue={txModal.data?._id || ''} />
             <div className="form-group">
               <label>Description</label>
@@ -952,6 +1011,8 @@ export default function App() {
                     onClick={() => {
                       setReceiptFile(null);
                       setReceiptPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+                      setOcrState({ status: 'idle', progress: 0 });
+                      setOcrHint('');
                     }}
                   >
                     Remove
@@ -979,6 +1040,48 @@ export default function App() {
               <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                 Photos are compressed on-device before upload (max 5 MB).
               </small>
+              {ocrState.status === 'reading' && (
+                <div style={{ marginTop: '0.5rem' }} aria-live="polite">
+                  <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Reading receipt… {ocrState.progress}%
+                  </small>
+                  <div
+                    role="progressbar"
+                    aria-valuenow={ocrState.progress}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label="Receipt reading progress"
+                    style={{
+                      height: '4px',
+                      borderRadius: '2px',
+                      background: 'rgba(255,255,255,0.12)',
+                      marginTop: '0.25rem',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${ocrState.progress}%`,
+                        background: 'var(--accent, #4f8cff)',
+                        transition: 'width 0.2s'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {ocrState.status === 'done' && ocrHint && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{ocrHint}</small>
+                </div>
+              )}
+              {ocrState.status === 'failed' && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Couldn't read this receipt — enter the details manually.
+                  </small>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button type="button" className="btn btn-secondary" onClick={() => setTxModal({ open: false, mode: 'add', data: null })}>
