@@ -1376,3 +1376,189 @@ input:focus, select:focus {
   padding: 0.35rem 0.8rem;
   font-size: 0.85rem;
 }
+
+/* Smart Insights card */
+.insights-card {
+  margin-bottom: 1.5rem;
+}
+
+.insights-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.insight-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.insight-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.insight-danger .insight-icon { color: var(--danger-color); background: rgba(239, 68, 68, 0.12); }
+.insight-warning .insight-icon { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.insight-info .insight-icon { color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.insight-success .insight-icon { color: var(--success-color); background: rgba(16, 185, 129, 0.12); }
+
+.insight-body { flex: 1; min-width: 0; }
+.insight-title { font-size: 0.92rem; font-weight: 600; color: var(--text-primary); }
+.insight-detail { margin: 0.15rem 0 0; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.45; }
+
+/* Floating assistant button + slide-over panel */
+.assistant-fab {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 5.5rem;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.45);
+  z-index: 900;
+  transition: transform 0.15s ease;
+}
+
+.assistant-fab:hover { transform: scale(1.06); }
+
+.assistant-panel {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 7.5rem;
+  width: min(360px, calc(100vw - 2.5rem));
+  max-height: min(520px, calc(100vh - 10rem));
+  display: flex;
+  flex-direction: column;
+  z-index: 901;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.assistant-header {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.assistant-header strong { font-size: 0.95rem; color: var(--text-primary); }
+.assistant-sub { font-size: 0.75rem; color: var(--text-secondary); }
+
+.assistant-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 120px;
+}
+
+.assistant-msg {
+  max-width: 85%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  font-size: 0.87rem;
+  line-height: 1.45;
+}
+
+.assistant-assistant {
+  align-self: flex-start;
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+
+.assistant-user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.assistant-thinking { display: flex; gap: 5px; padding: 0.8rem 1rem; }
+
+.thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: thinking-bounce 1.2s infinite ease-in-out;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thinking-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+.assistant-chips {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0 0.9rem 0.6rem;
+  overflow-x: auto;
+}
+
+.assistant-chip {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.assistant-chip:hover:not(:disabled) { background: rgba(139, 92, 246, 0.15); }
+.assistant-chip:disabled { opacity: 0.5; cursor: default; }
+
+.assistant-input-row {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem 0.9rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.assistant-input-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.87rem;
+}
+
+.assistant-input-row input:focus {
+  outline: none;
+  border-color: #8b5cf6;
+}
+
+@media (max-width: 480px) {
+  .assistant-fab { bottom: 5rem; right: 1rem; }
+  .assistant-panel { right: 1rem; bottom: 6.75rem; }
+}

@@ -11,6 +11,7 @@ import { computeBudgetStatus } from './budgetAlerts.js';
 import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
 import { queuedApiFetch, replayOutbox } from './offlineQueue.js';
+import Assistant from './components/Assistant';
 
 export default function App() {
   // State variables
@@ -1007,6 +1008,8 @@ export default function App() {
       </div>
 
       {/* Toast notifications */}
+      <Assistant transactions={transactions} budgets={budgets} />
+
       <div className="toast-container" aria-live="polite">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismissToast(t.id)}>
