@@ -12,6 +12,7 @@ const RecurringTransaction = require('../models/RecurringTransaction');
 const { sendPushToUser } = require('../lib/push');
 const { hashToken } = require('../lib/tokens');
 const { runDueRecurring, isValidFrequency } = require('../lib/recurring');
+const { parsePagination } = require('../lib/pagination');
 const { authMiddleware, parseCookies, rateLimitMiddleware } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
@@ -282,11 +283,7 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
     return res.json(transactions);
   }
 
-  let page = parseInt(pageRaw, 10);
-  let limit = parseInt(limitRaw, 10);
-  if (!Number.isInteger(page) || page < 1) page = 1;
-  if (!Number.isInteger(limit) || limit < 1) limit = 20;
-  limit = Math.min(limit, 100);
+  const { page, limit } = parsePagination(pageRaw, limitRaw);
 
   const total = await Transaction.countDocuments(filter);
   const transactions = await Transaction.find(filter)

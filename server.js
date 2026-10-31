@@ -80,7 +80,7 @@ app.get('*', (req, res) => {
 });
 
 // Express Central Error Handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error('Unhandled Server Error:', err);
   res.status(500).json({ error: 'An internal server error occurred.' });
 });

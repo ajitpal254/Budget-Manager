@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { isValidThresholds } = require('../lib/settings');
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -50,9 +51,7 @@ const userSchema = new mongoose.Schema({
     default: () => ({}),
     validate: {
       validator: function (s) {
-        const w = s && s.budgetWarningPct != null ? s.budgetWarningPct : 80;
-        const d = s && s.budgetDangerPct != null ? s.budgetDangerPct : 100;
-        return w < d;
+        return isValidThresholds(s && s.budgetWarningPct, s && s.budgetDangerPct);
       },
       message: 'Budget warning threshold must be less than the danger threshold.'
     }
