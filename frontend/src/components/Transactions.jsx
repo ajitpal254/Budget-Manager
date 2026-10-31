@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '../api';
 import { getPendingCount, onOutboxChange } from '../offlineQueue';
 import Recurring from './Recurring';
 
 const PAGE_SIZE = 8;
-
 // The ledger now pages and filters on the server. The `transactions` prop
 // (the full array App fetches for the Dashboard/Budgets views) is only used
 // to build the complete category dropdown; rows and the pager come from the
@@ -20,6 +19,52 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
   // Offline outbox indicator: re-reads whenever the queue changes.
   const [pendingCount, setPendingCount] = useState(() => getPendingCount());
   useEffect(() => onOutboxChange(() => setPendingCount(getPendingCount())), []);
+
+  // Receipt viewer modal: loads the image bytes on demand (auth cookie).
+  const [receiptView, setReceiptView] = useState({ open: false, id: null, description: '' });
+  const [receiptUrl, setReceiptUrl] = useState(null);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+
+  const closeReceiptView = () => setReceiptView({ open: false, id: null, description: '' });
+
+  // pushToast identity isn't stable across renders; keep a ref so the
+  // receipt-loading effect doesn't refetch on every parent render.
+  const pushToastRef = useRef(pushToast);
+  pushToastRef.current = pushToast;
+
+  useEffect(() => {
+    if (!receiptView.open || !receiptView.id) return;
+    let cancelled = false;
+    setReceiptLoading(true);
+    setReceiptUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    apiFetch(`/api/transactions/${receiptView.id}/receipt`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Receipt load failed: ${res.status}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        setReceiptUrl(URL.createObjectURL(blob));
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Error loading receipt:', err);
+          pushToastRef.current('error', 'Could not load the receipt image.');
+          setReceiptView({ open: false, id: null, description: '' });
+        }
+      })
+      .finally(() => { if (!cancelled) setReceiptLoading(false); });
+    return () => {
+      cancelled = true;
+      setReceiptUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
+  }, [receiptView.open, receiptView.id]);
+
+  // Escape closes the receipt viewer, matching the app's modal behavior.
+  useEffect(() => {
+    if (!receiptView.open) return;
+    const onKey = (e) => { if (e.key === 'Escape') closeReceiptView(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [receiptView.open]);
 
   // Retrieve unique categories from the full dataset so the filter
   // dropdown stays complete regardless of the current page.
@@ -199,6 +244,16 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
                   </td>
                   <td className="text-right">{formatCurrency(t.amount)}</td>
                   <td className="text-right">
+                    {t.receipt && t.receipt.contentType && (
+                      <button
+                        className="btn btn-text"
+                        title="View receipt"
+                        aria-label={`View receipt for ${t.description}`}
+                        onClick={() => setReceiptView({ open: true, id: t._id, description: t.description })}
+                      >
+                        🧾
+                      </button>
+                    )}
                     <button className="btn btn-text" onClick={() => onEdit(t)}>
                       Edit
                     </button>
@@ -253,6 +308,31 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
         pushToast={pushToast}
         onChanged={onChanged}
       />
+
+      {/* Receipt viewer modal */}
+      <div className={`modal ${receiptView.open ? 'show' : ''}`} role="dialog" aria-hidden={!receiptView.open}>
+        <div className="modal-content glass-card" style={{ maxWidth: '640px' }}>
+          <div className="modal-header">
+            <h3>Receipt{receiptView.description ? ` — ${receiptView.description}` : ''}</h3>
+            <button className="btn-close" onClick={closeReceiptView}>&times;</button>
+          </div>
+          <div style={{ textAlign: 'center', padding: '0.5rem 0' }}>
+            {receiptLoading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+            {!receiptLoading && receiptUrl && (
+              <img
+                src={receiptUrl}
+                alt={`Receipt for ${receiptView.description}`}
+                style={{ maxWidth: '100%', maxHeight: '70vh', borderRadius: 'var(--radius-md)' }}
+              />
+            )}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={closeReceiptView}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

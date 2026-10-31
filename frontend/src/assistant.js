@@ -83,6 +83,11 @@ const HOWTOS = [
       'If you lose connection, new transactions are queued on your device and sync automatically when you are back online. You will see a pending count in the Transactions tab until they sync.',
   },
   {
+    keys: ['receipt', 'photo', 'picture', 'scan'],
+    answer:
+      'To attach a receipt, open the Add/Edit transaction form and use the Attach receipt field — you can take a photo right from your phone. The photo is compressed on your device before upload. In the ledger, a receipt icon on a row opens the full image.',
+  },
+  {
     keys: ['delete'],
     answer:
       'To delete a transaction, budget or goal, find it in its tab and choose delete — the app will ask you to confirm first.',

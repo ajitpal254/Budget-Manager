@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
+const multer = require('multer');
 
 const Transaction = require('../models/Transaction');
 const Budget = require('../models/Budget');
@@ -13,6 +14,7 @@ const { sendPushToUser } = require('../lib/push');
 const { hashToken } = require('../lib/tokens');
 const { runDueRecurring, isValidFrequency } = require('../lib/recurring');
 const { parsePagination } = require('../lib/pagination');
+const { validateReceiptUpload, MAX_RECEIPT_BYTES } = require('../lib/receipts');
 const { authMiddleware, parseCookies, rateLimitMiddleware } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
@@ -421,6 +423,72 @@ router.delete('/transactions/:id', authMiddleware, asyncHandler(async (req, res)
     return res.status(404).json({ error: 'Transaction not found' });
   }
   res.json({ message: 'Transaction deleted successfully' });
+}));
+
+// --- RECEIPT ATTACHMENTS (SCOPED TO AUTH USER) ---
+// Receipts are photos stored as buffers on the Transaction document
+// (Render's disk is ephemeral). Uploads go through dedicated multipart
+// endpoints so the JSON create/update routes stay untouched.
+
+const receiptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_RECEIPT_BYTES },
+  fileFilter: (req, file, cb) => {
+    // Accept anything image/* here; the strict allowlist (no SVG, etc.)
+    // is enforced by validateReceiptUpload after parsing.
+    if (file.mimetype && file.mimetype.toLowerCase().startsWith('image/')) {
+      return cb(null, true);
+    }
+    cb(new Error('Only image files are accepted as receipts.'));
+  }
+}).single('receipt');
+
+// Wraps the multer middleware so MulterErrors (e.g. file too large)
+// become clean JSON responses instead of hitting the generic handler.
+const parseReceiptUpload = (req, res, next) => {
+  receiptUpload(req, res, (err) => {
+    if (err) {
+      const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+      return res.status(status).json({ error: err.message || 'Receipt upload failed.' });
+    }
+    next();
+  });
+};
+
+router.post('/transactions/:id/receipt', authMiddleware, parseReceiptUpload, asyncHandler(async (req, res) => {
+  const check = validateReceiptUpload(req.file);
+  if (!check.ok) {
+    return res.status(check.status).json({ error: check.error });
+  }
+  const tx = await Transaction.findOne({ _id: req.params.id, userId: req.user._id });
+  if (!tx) {
+    return res.status(404).json({ error: 'Transaction not found' });
+  }
+  tx.receipt = { data: req.file.buffer, contentType: req.file.mimetype.toLowerCase() };
+  await tx.save();
+  res.status(201).json({ message: 'Receipt attached.', hasReceipt: true });
+}));
+
+router.get('/transactions/:id/receipt', authMiddleware, asyncHandler(async (req, res) => {
+  const tx = await Transaction.findOne({ _id: req.params.id, userId: req.user._id })
+    .select('+receipt.data');
+  if (!tx || !tx.receipt || !tx.receipt.data) {
+    return res.status(404).json({ error: 'Receipt not found' });
+  }
+  res.set('Content-Type', tx.receipt.contentType || 'image/jpeg');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Length', tx.receipt.data.length);
+  res.send(tx.receipt.data);
+}));
+
+router.delete('/transactions/:id/receipt', authMiddleware, asyncHandler(async (req, res) => {
+  const tx = await Transaction.findOne({ _id: req.params.id, userId: req.user._id });
+  if (!tx) {
+    return res.status(404).json({ error: 'Transaction not found' });
+  }
+  tx.receipt = undefined;
+  await tx.save();
+  res.json({ message: 'Receipt removed.', hasReceipt: false });
 }));
 
 // --- RECURRING TRANSACTIONS (SCOPED TO AUTH USER) ---
