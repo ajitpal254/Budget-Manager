@@ -11,6 +11,7 @@ import { computeBudgetStatus } from './budgetAlerts.js';
 import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
 import { queuedApiFetch, replayOutbox } from './offlineQueue.js';
+import { compressReceiptImage } from './receipt.js';
 import Assistant from './components/Assistant';
 
 export default function App() {
@@ -42,6 +43,25 @@ export default function App() {
 
   // Modals state
   const [txModal, setTxModal] = useState({ open: false, mode: 'add', data: null });
+  // Receipt attachment staging for the transaction modal: the compressed
+  // blob chosen in the form, its preview URL, and whether an existing
+  // receipt should be removed on save (edit mode).
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [receiptPreview, setReceiptPreview] = useState(null);
+  const [receiptRemoved, setReceiptRemoved] = useState(false);
+
+  // Reset receipt staging whenever the transaction modal opens; revoke the
+  // preview URL when it closes to avoid leaking object URLs.
+  useEffect(() => {
+    if (txModal.open) {
+      setReceiptFile(null);
+      setReceiptRemoved(false);
+      setReceiptPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+    }
+  }, [txModal.open]);
   const [budgetModal, setBudgetModal] = useState({ open: false, data: null });
   const [goalModal, setGoalModal] = useState({ open: false, mode: 'add', data: null });
 
@@ -313,6 +333,28 @@ export default function App() {
   };
 
   // --- TRANSACTION CRUD ---
+  const handleReceiptChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      pushToast('error', 'Please choose a photo file.');
+      return;
+    }
+    try {
+      const compressed = await compressReceiptImage(file);
+      setReceiptPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(compressed);
+      });
+      setReceiptFile(compressed);
+      setReceiptRemoved(false);
+    } catch (err) {
+      console.error('Receipt compression failed:', err);
+      pushToast('error', 'Could not read that image.');
+    }
+  };
+
   const handleTxSubmit = async (e) => {
     e.preventDefault();
     if (saving.tx) return;
@@ -351,9 +393,44 @@ export default function App() {
 
       if (queued) {
         // Offline: the change is in the local outbox and will sync later.
+        // Receipts need a server-side transaction id, so they are skipped
+        // while offline.
+        if (receiptFile) {
+          pushToast('error', 'Receipt skipped while offline — attach it again once you reconnect.');
+        }
+        setReceiptFile(null);
+        setReceiptPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+        setReceiptRemoved(false);
         setTxModal({ open: false, mode: 'add', data: null });
         pushToast('success', "You're offline — change saved and will sync when you reconnect.");
       } else if (res.ok) {
+        const savedTx = await res.json().catch(() => null);
+        const txId = (savedTx && savedTx._id) || id;
+        // Attach or remove the receipt now that the transaction exists.
+        if (txId && (receiptFile || receiptRemoved)) {
+          try {
+            if (receiptFile) {
+              const fd = new FormData();
+              fd.append('receipt', receiptFile, 'receipt.jpg');
+              const upRes = await apiFetch(`/api/transactions/${txId}/receipt`, {
+                method: 'POST',
+                body: fd
+              });
+              if (!upRes.ok) {
+                const d = await upRes.json().catch(() => ({}));
+                pushToast('error', d.error || 'Transaction saved, but the receipt could not be uploaded.');
+              }
+            } else if (receiptRemoved) {
+              await apiFetch(`/api/transactions/${txId}/receipt`, { method: 'DELETE' });
+            }
+          } catch (err) {
+            console.error('Receipt upload failed:', err);
+            pushToast('error', 'Transaction saved, but the receipt could not be uploaded.');
+          }
+        }
+        setReceiptFile(null);
+        setReceiptPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+        setReceiptRemoved(false);
         setTxModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
         pushToast('success', id ? 'Transaction updated.' : 'Transaction added.');
@@ -859,6 +936,49 @@ export default function App() {
                   }
                 />
               </div>
+            </div>
+            <div className="form-group">
+              <label>Receipt (optional)</label>
+              {receiptPreview ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <img
+                    src={receiptPreview}
+                    alt="Receipt preview"
+                    style={{ width: '64px', height: '64px', objectFit: 'cover', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-text text-danger"
+                    onClick={() => {
+                      setReceiptFile(null);
+                      setReceiptPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (txModal.mode === 'edit' && txModal.data?.receipt?.contentType && !receiptRemoved) ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span className="tx-category-badge">🧾 Receipt attached</span>
+                  <button
+                    type="button"
+                    className="btn btn-text text-danger"
+                    onClick={() => setReceiptRemoved(true)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <input
+                  type="file"
+                  accept="image/*"
+                  aria-label="Attach receipt photo"
+                  onChange={handleReceiptChange}
+                />
+              )}
+              <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                Photos are compressed on-device before upload (max 5 MB).
+              </small>
             </div>
             <div className="modal-footer">
               <button type="button" className="btn btn-secondary" onClick={() => setTxModal({ open: false, mode: 'add', data: null })}>
