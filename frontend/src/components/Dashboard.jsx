@@ -1,11 +1,13 @@
 import React from 'react';
+import TrendsChart from './TrendsChart';
+import { computeBudgetStatus } from '../budgetAlerts.js';
 
 const categoryColors = [
   '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
   '#ec4899', '#06b6d4', '#14b8a6', '#f43f5e', '#a855f7'
 ];
 
-export default function Dashboard({ transactions, formatCurrency, formatDate, setTab }) {
+export default function Dashboard({ transactions, budgets = [], formatCurrency, formatDate, setTab }) {
   // Stats
   const income = transactions
     .filter(t => t.type === 'income')
@@ -16,6 +18,11 @@ export default function Dashboard({ transactions, formatCurrency, formatDate, se
     .reduce((acc, t) => acc + t.amount, 0);
 
   const net = income - expenses;
+
+  // Budgets that need attention (>=80% used or over the limit)
+  const budgetAlerts = computeBudgetStatus(budgets, transactions)
+    .filter(s => s.status !== 'ok')
+    .sort((a, b) => b.percent - a.percent);
 
   // Chart math
   const expenseTransactions = transactions.filter(t => t.type === 'expense');
@@ -88,6 +95,28 @@ export default function Dashboard({ transactions, formatCurrency, formatDate, se
           <p className="card-desc">Total outgoing payments</p>
         </div>
       </div>
+
+      {/* Budget alerts summary (only when something needs attention) */}
+      {budgetAlerts.length > 0 && (
+        <div className="card glass-card budget-alerts-card">
+          <h2 className="section-heading">Budget Alerts</h2>
+          <ul className="budget-alerts-list">
+            {budgetAlerts.map(s => (
+              <li key={s.budget._id || s.budget.category} className="budget-alert-row">
+                <span className="tx-category-badge">{s.budget.category}</span>
+                <span className="budget-alert-text">
+                  {s.status === 'danger'
+                    ? `Over budget by ${formatCurrency(s.spent - s.budget.limit)}`
+                    : `${Math.round(s.percent)}% of ${formatCurrency(s.budget.limit)} used`}
+                </span>
+                <span className={`alert-badge ${s.status === 'danger' ? 'alert-danger' : 'alert-warning'}`}>
+                  {s.status === 'danger' ? 'Over limit' : 'Watch out'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Main Charts / List Grid */}
       <div className="dashboard-grid">
@@ -170,6 +199,9 @@ export default function Dashboard({ transactions, formatCurrency, formatDate, se
           </div>
         </div>
       </div>
+
+      {/* Monthly trends: income vs expenses over the last 6 months */}
+      <TrendsChart transactions={transactions} formatCurrency={formatCurrency} />
     </div>
   );
 }
