@@ -85,8 +85,35 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
     setCurrentPage(1);
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const res = await apiFetch('/api/transactions/export');
+      if (!res.ok) throw new Error(`Export failed with status ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const cd = res.headers.get('content-disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/);
+      a.download = match ? match[1] : 'transactions.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      pushToast('success', 'Transactions exported as CSV.');
+    } catch (err) {
+      console.error('Error exporting transactions:', err);
+      pushToast('error', 'Could not export transactions. Check your connection.');
+    }
+  };
+
   return (
     <div className="tab-view active">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+        <button className="btn btn-secondary" onClick={handleExportCsv}>
+          Export CSV
+        </button>
+      </div>
       {/* Filtering Box */}
       <div className="card glass-card filter-card">
         <div className="filter-row">

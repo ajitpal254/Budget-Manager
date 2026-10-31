@@ -296,6 +296,37 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   res.json({ transactions, total, page, limit });
 }));
 
+// Quote a CSV field when it contains a comma, quote, or line break,
+// doubling any embedded quotes (RFC 4180).
+const escapeCsvField = (value) => {
+  const s = String(value ?? '');
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// GET /api/transactions/export — full CSV dump of the user's transactions
+// (no pagination; it is an export), oldest first.
+router.get('/transactions/export', authMiddleware, asyncHandler(async (req, res) => {
+  const transactions = await Transaction.find({ userId: req.user._id }).sort({ date: 1 });
+
+  const lines = ['date,description,category,type,amount'];
+  for (const t of transactions) {
+    const date = t.date ? new Date(t.date).toISOString().slice(0, 10) : '';
+    lines.push([
+      date,
+      escapeCsvField(t.description),
+      escapeCsvField(t.category),
+      t.type,
+      t.amount
+    ].join(','));
+  }
+
+  const filename = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  // BOM so Excel opens UTF-8 correctly.
+  res.send('\uFEFF' + lines.join('\n'));
+}));
+
 // Checks whether a newly saved expense pushed its category's total spend
 // across the user's warning/danger budget thresholds (their settings, or
 // the 80/100 defaults), and notifies the user's subscribed devices if so.
