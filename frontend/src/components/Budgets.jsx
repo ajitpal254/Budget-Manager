@@ -1,9 +1,10 @@
 import React from 'react';
 import { computeBudgetStatus } from '../budgetAlerts.js';
 
-export default function Budgets({ budgets, transactions, formatCurrency, onAddTrigger, onDelete }) {
-  // Per-category spend vs. limit, with warning (>=80%) / danger (>=100%) status
-  const statuses = computeBudgetStatus(budgets, transactions);
+export default function Budgets({ budgets, transactions, formatCurrency, onAddTrigger, onDelete, warningPct, dangerPct }) {
+  // Per-category spend vs. limit, with warning/danger status from the
+  // user's thresholds (80/100 defaults when unset)
+  const statuses = computeBudgetStatus(budgets, transactions, warningPct, dangerPct);
   const statusByCategory = {};
   statuses.forEach(s => { statusByCategory[s.budget.category] = s; });
 

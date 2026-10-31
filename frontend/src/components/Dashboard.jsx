@@ -7,7 +7,7 @@ const categoryColors = [
   '#ec4899', '#06b6d4', '#14b8a6', '#f43f5e', '#a855f7'
 ];
 
-export default function Dashboard({ transactions, budgets = [], formatCurrency, formatDate, setTab }) {
+export default function Dashboard({ transactions, budgets = [], formatCurrency, formatDate, setTab, warningPct, dangerPct }) {
   // Stats
   const income = transactions
     .filter(t => t.type === 'income')
@@ -19,8 +19,8 @@ export default function Dashboard({ transactions, budgets = [], formatCurrency, 
 
   const net = income - expenses;
 
-  // Budgets that need attention (>=80% used or over the limit)
-  const budgetAlerts = computeBudgetStatus(budgets, transactions)
+  // Budgets that need attention (past the warning threshold or over the limit)
+  const budgetAlerts = computeBudgetStatus(budgets, transactions, warningPct, dangerPct)
     .filter(s => s.status !== 'ok')
     .sort((a, b) => b.percent - a.percent);
 

@@ -28,6 +28,34 @@ const userSchema = new mongoose.Schema({
   hashIterations: {
     type: Number,
     default: 310000
+  },
+  // Per-user budget alert thresholds (percent of a category's budget limit).
+  // Defaults mirror the app-wide 80/100 values; the settings UI and the
+  // push-alert trigger read these, falling back to 80/100 when unset.
+  settings: {
+    type: {
+      budgetWarningPct: {
+        type: Number,
+        default: 80,
+        min: [1, 'Warning threshold must be at least 1'],
+        max: [100, 'Warning threshold cannot exceed 100']
+      },
+      budgetDangerPct: {
+        type: Number,
+        default: 100,
+        min: [1, 'Danger threshold must be at least 1'],
+        max: [100, 'Danger threshold cannot exceed 100']
+      }
+    },
+    default: () => ({}),
+    validate: {
+      validator: function (s) {
+        const w = s && s.budgetWarningPct != null ? s.budgetWarningPct : 80;
+        const d = s && s.budgetDangerPct != null ? s.budgetDangerPct : 100;
+        return w < d;
+      },
+      message: 'Budget warning threshold must be less than the danger threshold.'
+    }
   }
 }, {
   timestamps: true

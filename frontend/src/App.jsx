@@ -4,6 +4,7 @@ import Transactions from './components/Transactions';
 import Budgets from './components/Budgets';
 import Goals from './components/Goals';
 import Auth from './components/Auth';
+import Profile from './components/Profile';
 import ErrorBoundary from './components/ErrorBoundary';
 import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './components/Skeletons';
 import { computeBudgetStatus } from './budgetAlerts.js';
@@ -20,6 +21,9 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [goals, setGoals] = useState([]);
+  // The user's alert thresholds ({ budgetWarningPct, budgetDangerPct }),
+  // fetched once after sign-in; drives budget-alert math everywhere in the UI.
+  const [settings, setSettings] = useState(null);
   // Bumped after every transaction mutation so the Transactions ledger
   // (which pages on the server) refetches its current page.
   const [txRefreshKey, setTxRefreshKey] = useState(0);
@@ -46,8 +50,8 @@ export default function App() {
   const prevBudgetStatuses = useRef({});
   const alertsInitialized = useRef(false);
 
-  const checkBudgetAlerts = (nextBudgets, nextTransactions) => {
-    const statuses = computeBudgetStatus(nextBudgets, nextTransactions);
+  const checkBudgetAlerts = (nextBudgets, nextTransactions, warningPct = 80, dangerPct = 100) => {
+    const statuses = computeBudgetStatus(nextBudgets, nextTransactions, warningPct, dangerPct);
     if (!alertsInitialized.current) {
       // First load: record the current state silently instead of toasting for it.
       alertsInitialized.current = true;
@@ -158,14 +162,25 @@ export default function App() {
 
   const fetchInitialData = async () => {
     try {
-      const [txRes, budgetRes, goalRes] = await Promise.all([
+      const [txRes, budgetRes, goalRes, settingsRes] = await Promise.all([
         apiFetch('/api/transactions'),
         apiFetch('/api/budgets'),
-        apiFetch('/api/goals')
+        apiFetch('/api/goals'),
+        apiFetch('/api/user/settings')
       ]);
 
       let txs = [];
       let bds = [];
+      // User's alert thresholds; 80/100 until they've saved their own.
+      let thresholds = { warning: 80, danger: 100 };
+      if (settingsRes.ok) {
+        const s = await settingsRes.json();
+        thresholds = {
+          warning: s.budgetWarningPct ?? 80,
+          danger: s.budgetDangerPct ?? 100
+        };
+        setSettings(s);
+      }
       if (txRes.ok) {
         txs = await txRes.json();
         setTransactions(txs);
@@ -178,7 +193,7 @@ export default function App() {
       }
       if (goalRes.ok) setGoals(await goalRes.json());
 
-      checkBudgetAlerts(bds, txs);
+      checkBudgetAlerts(bds, txs, thresholds.warning, thresholds.danger);
     } catch (err) {
       console.error('Error fetching backend data:', err);
     }
@@ -220,6 +235,7 @@ export default function App() {
     setTransactions([]);
     setBudgets([]);
     setGoals([]);
+    setSettings(null);
     setTxModal({ open: false, mode: 'add', data: null });
     setBudgetModal({ open: false, data: null });
     setGoalModal({ open: false, mode: 'add', data: null });
@@ -498,6 +514,7 @@ export default function App() {
       case 'transactions': return 'Transactions Ledger';
       case 'budgets': return 'Category Budgets';
       case 'goals': return 'Saving Goals';
+      case 'profile': return 'Profile & Settings';
       default: return 'Aura';
     }
   };
@@ -548,6 +565,10 @@ export default function App() {
           <button className={`nav-item ${tab === 'goals' ? 'active' : ''}`} onClick={() => setTab('goals')}>
             <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
             Saving Goals
+          </button>
+          <button className={`nav-item ${tab === 'profile' ? 'active' : ''}`} onClick={() => setTab('profile')}>
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Profile
           </button>
         </nav>
 
@@ -615,6 +636,8 @@ export default function App() {
                   formatCurrency={formatCurrency}
                   formatDate={formatDate}
                   setTab={setTab}
+                  warningPct={settings?.budgetWarningPct}
+                  dangerPct={settings?.budgetDangerPct}
                 />
               </ErrorBoundary>
             )}
@@ -638,6 +661,8 @@ export default function App() {
                   formatCurrency={formatCurrency}
                   onAddTrigger={() => setBudgetModal({ open: true, data: null })}
                   onDelete={handleBudgetDelete}
+                  warningPct={settings?.budgetWarningPct}
+                  dangerPct={settings?.budgetDangerPct}
                 />
               </ErrorBoundary>
             )}
@@ -650,6 +675,19 @@ export default function App() {
                   onAddTrigger={() => setGoalModal({ open: true, mode: 'add', data: null })}
                   onEdit={handleGoalEditTrigger}
                   onDelete={handleGoalDelete}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'profile' && (
+              <ErrorBoundary key="profile">
+                <Profile
+                  user={user}
+                  settings={settings}
+                  onNameSaved={(name) => setUser(u => ({ ...u, name }))}
+                  onSettingsSaved={(s) => setSettings(s)}
+                  pushToast={pushToast}
+                  askConfirm={askConfirm}
+                  formatDate={formatDate}
                 />
               </ErrorBoundary>
             )}
@@ -674,6 +712,10 @@ export default function App() {
         <button className={`mobile-nav-item ${tab === 'goals' ? 'active' : ''}`} onClick={() => setTab('goals')}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
           <span>Goals</span>
+        </button>
+        <button className={`mobile-nav-item ${tab === 'profile' ? 'active' : ''}`} onClick={() => setTab('profile')}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span>Profile</span>
         </button>
       </nav>
 
