@@ -22,6 +22,12 @@ const userSchema = new mongoose.Schema({
   passwordSalt: {
     type: String,
     required: true
+  },
+  // PBKDF2 iteration count used for passwordHash. Stored so hashes can be
+  // verified (and upgraded) if the iteration count changes in the future.
+  hashIterations: {
+    type: Number,
+    default: 310000
   }
 }, {
   timestamps: true

@@ -4,13 +4,7 @@ import Transactions from './components/Transactions';
 import Budgets from './components/Budgets';
 import Goals from './components/Goals';
 import Auth from './components/Auth';
-
-const getCookie = (name) => {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-  return '';
-};
+import { apiFetch, getCookie } from './api.js';
 
 export default function App() {
   // State variables
@@ -34,7 +28,7 @@ export default function App() {
 
   const checkAuth = async () => {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await apiFetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
@@ -45,7 +39,7 @@ export default function App() {
         setUser(null);
         setDbStatus('connected');
         // Fetch initial CSRF token for guest actions (Login/Register)
-        await fetch('/api/auth/csrf-token');
+        await apiFetch('/api/auth/csrf-token');
       }
     } catch (err) {
       console.error('Error checking authentication status:', err);
@@ -58,9 +52,9 @@ export default function App() {
   const fetchInitialData = async () => {
     try {
       const [txRes, budgetRes, goalRes] = await Promise.all([
-        fetch('/api/transactions'),
-        fetch('/api/budgets'),
-        fetch('/api/goals')
+        apiFetch('/api/transactions'),
+        apiFetch('/api/budgets'),
+        apiFetch('/api/goals')
       ]);
 
       if (txRes.ok) {
@@ -83,7 +77,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', {
+      await apiFetch('/api/auth/logout', {
         method: 'POST',
         headers: {
           'x-csrf-token': getCookie('csrfToken')
@@ -138,13 +132,13 @@ export default function App() {
       };
 
       if (id) {
-        res = await fetch(`/api/transactions/${id}`, {
+        res = await apiFetch(`/api/transactions/${id}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify(payload)
         });
       } else {
-        res = await fetch('/api/transactions', {
+        res = await apiFetch('/api/transactions', {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
@@ -162,7 +156,7 @@ export default function App() {
 
   const handleTxDelete = async (id) => {
     try {
-      const res = await fetch(`/api/transactions/${id}`, {
+      const res = await apiFetch(`/api/transactions/${id}`, {
         method: 'DELETE',
         headers: {
           'x-csrf-token': getCookie('csrfToken')
@@ -190,7 +184,7 @@ export default function App() {
     };
 
     try {
-      const res = await fetch('/api/budgets', {
+      const res = await apiFetch('/api/budgets', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -210,7 +204,7 @@ export default function App() {
 
   const handleBudgetDelete = async (id) => {
     try {
-      const res = await fetch(`/api/budgets/${id}`, {
+      const res = await apiFetch(`/api/budgets/${id}`, {
         method: 'DELETE',
         headers: {
           'x-csrf-token': getCookie('csrfToken')
@@ -245,13 +239,13 @@ export default function App() {
       };
 
       if (id) {
-        res = await fetch(`/api/goals/${id}`, {
+        res = await apiFetch(`/api/goals/${id}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify(payload)
         });
       } else {
-        res = await fetch('/api/goals', {
+        res = await apiFetch('/api/goals', {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
@@ -269,7 +263,7 @@ export default function App() {
 
   const handleGoalDelete = async (id) => {
     try {
-      const res = await fetch(`/api/goals/${id}`, {
+      const res = await apiFetch(`/api/goals/${id}`, {
         method: 'DELETE',
         headers: {
           'x-csrf-token': getCookie('csrfToken')
