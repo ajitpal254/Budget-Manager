@@ -1,5 +1,6 @@
 const Session = require('../models/Session');
 const User = require('../models/User');
+const { hashToken } = require('../lib/tokens');
 
 // Helper to manually parse cookies
 const parseCookies = (cookieHeader) => {
@@ -72,7 +73,7 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    const session = await Session.findOne({ token });
+    const session = await Session.findOne({ token: hashToken(token) });
     if (!session || session.expiresAt < new Date()) {
       if (session) await Session.deleteOne({ _id: session._id });
       return res.status(401).json({ error: 'Session expired or invalid.' });
