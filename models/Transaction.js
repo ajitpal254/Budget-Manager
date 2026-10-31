@@ -34,6 +34,20 @@ const transactionSchema = new mongoose.Schema({
   date: {
     type: Date,
     default: Date.now
+  },
+  // Optional receipt photo, embedded on the document (Render's disk is
+  // ephemeral, so there is nowhere else to put it). `data` is excluded
+  // from query results by default so list endpoints never pull image
+  // bytes; only `contentType` is visible, which is enough for the UI to
+  // show a "has receipt" badge.
+  receipt: {
+    data: {
+      type: Buffer,
+      select: false
+    },
+    contentType: {
+      type: String
+    }
   }
 }, {
   timestamps: true
