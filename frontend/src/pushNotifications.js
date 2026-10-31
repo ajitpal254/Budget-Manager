@@ -87,3 +87,47 @@ export async function enablePushNotifications() {
   dismissPushPrompt();
   return { ok: true, message: 'Budget alerts enabled on this device.' };
 }
+
+// Current push state on this device: 'enabled' | 'disabled' | 'unsupported'.
+// Never throws — failures resolve to 'disabled' so the settings UI can
+// render without special-casing.
+export async function getPushStatus() {
+  if (typeof window === 'undefined') return 'unsupported';
+  if (!('Notification' in window)) return 'unsupported';
+  if (!('serviceWorker' in navigator)) return 'unsupported';
+  if (!('PushManager' in window)) return 'unsupported';
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    return subscription ? 'enabled' : 'disabled';
+  } catch {
+    return 'disabled';
+  }
+}
+
+// Removes the backend subscription for this device's endpoint and
+// unsubscribes locally. Resolves { ok, message } like the enable flow.
+export async function disablePushNotifications() {
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      await apiFetch('/api/push/unsubscribe', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrfToken')
+        },
+        body: JSON.stringify({ endpoint: subscription.endpoint })
+      }).catch(() => {
+        // Backend cleanup is best-effort; the local unsubscribe below is
+        // what actually stops notifications on this device.
+      });
+      await subscription.unsubscribe().catch(() => {});
+    }
+    return { ok: true, message: 'Push notifications disabled on this device.' };
+  } catch (err) {
+    console.error('Push opt-out failed:', err);
+    return { ok: false, message: 'Could not disable notifications. Please try again.' };
+  }
+}

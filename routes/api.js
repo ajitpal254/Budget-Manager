@@ -281,15 +281,21 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
 }));
 
 // Checks whether a newly saved expense pushed its category's total spend
-// across the 80% (warning) or 100% (danger) budget threshold, and notifies
-// the user's subscribed devices if so. Resolves silently when there is no
-// budget for the category or no threshold was crossed.
+// across the user's warning/danger budget thresholds (their settings, or
+// the 80/100 defaults), and notifies the user's subscribed devices if so.
+// Resolves silently when there is no budget for the category or no
+// threshold was crossed.
 async function checkBudgetThreshold(savedTx) {
   const budget = await Budget.findOne({
     userId: savedTx.userId,
     category: savedTx.category
   });
   if (!budget || !(budget.limit > 0)) return;
+
+  // Per-user thresholds; fall back to 80/100 when the user never set them.
+  const user = await User.findById(savedTx.userId).select('settings').lean();
+  const warningPct = user?.settings?.budgetWarningPct ?? 80;
+  const dangerPct = user?.settings?.budgetDangerPct ?? 100;
 
   const agg = await Transaction.aggregate([
     { $match: { userId: savedTx.userId, type: 'expense', category: savedTx.category } },
@@ -299,8 +305,8 @@ async function checkBudgetThreshold(savedTx) {
   const pctBefore = ((total - savedTx.amount) / budget.limit) * 100;
   const pctNow = (total / budget.limit) * 100;
 
-  const crossedWarning = pctBefore < 80 && pctNow >= 80;
-  const crossedDanger = pctBefore < 100 && pctNow >= 100;
+  const crossedWarning = pctBefore < warningPct && pctNow >= warningPct;
+  const crossedDanger = pctBefore < dangerPct && pctNow >= dangerPct;
   if (!crossedWarning && !crossedDanger) return;
 
   const over = crossedDanger;
@@ -495,6 +501,114 @@ router.delete('/push/unsubscribe', authMiddleware, asyncHandler(async (req, res)
   }
   await PushSubscription.deleteOne({ endpoint, userId: req.user._id });
   res.json({ message: 'Push subscription removed.' });
+}));
+
+// --- USER PROFILE & SETTINGS ---
+
+// GET /api/user/profile (auth) — public profile fields. Email is read-only:
+// it's the login identity and can never be changed through the API.
+router.get('/user/profile', authMiddleware, asyncHandler(async (req, res) => {
+  res.json({
+    name: req.user.name,
+    email: req.user.email,
+    createdAt: req.user.createdAt
+  });
+}));
+
+// PATCH /api/user/profile (auth + CSRF) — updates the display name only.
+router.patch('/user/profile', authMiddleware, asyncHandler(async (req, res) => {
+  const { name } = req.body || {};
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 100) {
+    return res.status(400).json({ error: 'Name must be between 1 and 100 characters.' });
+  }
+  const updated = await User.findOneAndUpdate(
+    { _id: req.user._id },
+    { $set: { name: name.trim() } },
+    { new: true, runValidators: true }
+  );
+  res.json({ name: updated.name, email: updated.email });
+}));
+
+// POST /api/user/change-password (auth + CSRF) — verifies the current
+// password, rehashes with the current PBKDF2 params, and closes every other
+// session so a changed password actually locks out other devices.
+router.post('/user/change-password', authMiddleware, asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+    return res.status(400).json({ error: 'Invalid input format' });
+  }
+  if (newPassword.length < 12) {
+    return res.status(400).json({ error: 'New password must be at least 12 characters long' });
+  }
+
+  // Need the full document (authMiddleware strips the password fields).
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    return res.status(401).json({ error: 'User does not exist.' });
+  }
+  const iterations = user.hashIterations || LEGACY_PBKDF2_ITERATIONS;
+  const computedHash = hashPassword(currentPassword, user.passwordSalt, iterations);
+  if (!safeHashEquals(computedHash, user.passwordHash)) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+
+  user.passwordSalt = generateSalt();
+  user.passwordHash = hashPassword(newPassword, user.passwordSalt);
+  user.hashIterations = PBKDF2_ITERATIONS;
+  await user.save();
+
+  // Keep only the current session; every other device is signed out.
+  const cookies = parseCookies(req.headers.cookie);
+  const currentToken = cookies['sessionToken'];
+  const keepHashed = currentToken ? [hashToken(currentToken)] : [];
+  const result = await Session.deleteMany({
+    userId: user._id,
+    token: { $nin: keepHashed }
+  });
+  res.json({ message: 'Password changed successfully.', otherSessionsClosed: result.deletedCount });
+}));
+
+// GET /api/user/settings (auth) — budget alert thresholds, 80/100 when unset.
+router.get('/user/settings', authMiddleware, asyncHandler(async (req, res) => {
+  const s = req.user.settings || {};
+  res.json({
+    budgetWarningPct: s.budgetWarningPct ?? 80,
+    budgetDangerPct: s.budgetDangerPct ?? 100
+  });
+}));
+
+// PATCH /api/user/settings (auth + CSRF) — accepts one or both thresholds;
+// missing fields keep their current values. Warning must stay below danger.
+router.patch('/user/settings', authMiddleware, asyncHandler(async (req, res) => {
+  const { budgetWarningPct, budgetDangerPct } = req.body || {};
+  const cur = req.user.settings || {};
+  const w = budgetWarningPct === undefined ? (cur.budgetWarningPct ?? 80) : Number(budgetWarningPct);
+  const d = budgetDangerPct === undefined ? (cur.budgetDangerPct ?? 100) : Number(budgetDangerPct);
+  if (!Number.isFinite(w) || !Number.isFinite(d) || w < 1 || w > 100 || d < 1 || d > 100) {
+    return res.status(400).json({ error: 'Thresholds must be numbers between 1 and 100.' });
+  }
+  if (!(w < d)) {
+    return res.status(400).json({ error: 'Warning threshold must be less than the danger threshold.' });
+  }
+  await User.updateOne(
+    { _id: req.user._id },
+    { $set: { 'settings.budgetWarningPct': w, 'settings.budgetDangerPct': d } },
+    { runValidators: true }
+  );
+  res.json({ budgetWarningPct: w, budgetDangerPct: d });
+}));
+
+// POST /api/user/logout-all (auth + CSRF) — closes every session except the
+// current one, identified by hashing the presented cookie like logout does.
+router.post('/user/logout-all', authMiddleware, asyncHandler(async (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const currentToken = cookies['sessionToken'];
+  const keepHashed = currentToken ? [hashToken(currentToken)] : [];
+  const result = await Session.deleteMany({
+    userId: req.user._id,
+    token: { $nin: keepHashed }
+  });
+  res.json({ message: 'Signed out of all other devices.', sessionsClosed: result.deletedCount });
 }));
 
 module.exports = router;
