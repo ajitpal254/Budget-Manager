@@ -28,7 +28,12 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  const rawUrl = (event.notification.data && event.notification.data.url) || '/';
+  // Only allow same-app navigation: relative paths. Absolute URLs,
+  // protocol-relative URLs (//host), and non-strings fall back to '/'.
+  const url = (typeof rawUrl === 'string' && rawUrl.startsWith('/') && !rawUrl.startsWith('//'))
+    ? rawUrl
+    : '/';
 
   event.waitUntil(
     self.clients
