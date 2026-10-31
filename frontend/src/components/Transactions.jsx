@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../api';
+import { getPendingCount, onOutboxChange } from '../offlineQueue';
+import Recurring from './Recurring';
 
 const PAGE_SIZE = 8;
 
@@ -7,13 +9,17 @@ const PAGE_SIZE = 8;
 // (the full array App fetches for the Dashboard/Budgets views) is only used
 // to build the complete category dropdown; rows and the pager come from the
 // paginated endpoint response.
-export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete, refreshKey }) {
+export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete, refreshKey, askConfirm, pushToast, onChanged }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+
+  // Offline outbox indicator: re-reads whenever the queue changes.
+  const [pendingCount, setPendingCount] = useState(() => getPendingCount());
+  useEffect(() => onOutboxChange(() => setPendingCount(getPendingCount())), []);
 
   // Retrieve unique categories from the full dataset so the filter
   // dropdown stays complete regardless of the current page.
@@ -84,8 +90,51 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
     setCurrentPage(1);
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const res = await apiFetch('/api/transactions/export');
+      if (!res.ok) throw new Error(`Export failed with status ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const cd = res.headers.get('content-disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/);
+      a.download = match ? match[1] : 'transactions.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      pushToast('success', 'Transactions exported as CSV.');
+    } catch (err) {
+      console.error('Error exporting transactions:', err);
+      pushToast('error', 'Could not export transactions. Check your connection.');
+    }
+  };
+
   return (
     <div className="tab-view active">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+        <button className="btn btn-secondary" onClick={handleExportCsv}>
+          Export CSV
+        </button>
+      </div>
+      {pendingCount > 0 && (
+        <div
+          role="status"
+          style={{
+            marginBottom: '1rem',
+            padding: '0.6rem 1rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            color: 'var(--text-primary)',
+            fontSize: '0.9rem'
+          }}
+        >
+          {pendingCount} offline change{pendingCount === 1 ? '' : 's'} pending — will sync when you&rsquo;re back online.
+        </div>
+      )}
       {/* Filtering Box */}
       <div className="card glass-card filter-card">
         <div className="filter-row">
@@ -195,6 +244,15 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
           </div>
         </div>
       </div>
+
+      {/* Recurring templates: managed here, materialized by the backend */}
+      <Recurring
+        formatCurrency={formatCurrency}
+        formatDate={formatDate}
+        askConfirm={askConfirm}
+        pushToast={pushToast}
+        onChanged={onChanged}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './compone
 import { computeBudgetStatus } from './budgetAlerts.js';
 import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
+import { queuedApiFetch, replayOutbox } from './offlineQueue.js';
 
 export default function App() {
   // State variables
@@ -18,6 +19,15 @@ export default function App() {
   // True only while the first data fetch after sign-in runs; drives skeletons.
   const [initialLoading, setInitialLoading] = useState(false);
   const [tab, setTab] = useState('dashboard');
+  // Theme: 'dark' is the default glass design (unchanged); 'light' swaps the
+  // CSS variables. Persisted in localStorage.
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('bm-theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [goals, setGoals] = useState([]);
@@ -210,6 +220,36 @@ export default function App() {
     }
   };
 
+  // Apply the theme to <html> and persist the choice.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('bm-theme', theme);
+    } catch {
+      // Private mode etc. — theme just won't persist.
+    }
+  }, [theme]);
+
+  // Offline outbox: replay any queued transaction mutations whenever the
+  // user signs in (covers queue left from a previous session) and whenever
+  // the browser reports coming back online.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const syncOutbox = async () => {
+      const synced = await replayOutbox();
+      if (cancelled || synced === 0) return;
+      pushToast('success', `${synced} offline change${synced === 1 ? '' : 's'} synced.`);
+      await fetchInitialData();
+    };
+    syncOutbox();
+    window.addEventListener('online', syncOutbox);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', syncOutbox);
+    };
+  }, [user]);
+
   // --- AUTH HANDLERS ---
   const handleAuthSuccess = (userData) => {
     setUser(userData);
@@ -288,26 +328,31 @@ export default function App() {
 
     try {
       let res;
+      let queued = false;
       const headers = {
         'Content-Type': 'application/json',
         'x-csrf-token': getCookie('csrfToken')
       };
 
       if (id) {
-        res = await apiFetch(`/api/transactions/${id}`, {
+        ({ queued, res } = await queuedApiFetch(`/api/transactions/${id}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify(payload)
-        });
+        }));
       } else {
-        res = await apiFetch('/api/transactions', {
+        ({ queued, res } = await queuedApiFetch('/api/transactions', {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
-        });
+        }));
       }
 
-      if (res.ok) {
+      if (queued) {
+        // Offline: the change is in the local outbox and will sync later.
+        setTxModal({ open: false, mode: 'add', data: null });
+        pushToast('success', "You're offline — change saved and will sync when you reconnect.");
+      } else if (res.ok) {
         setTxModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
         pushToast('success', id ? 'Transaction updated.' : 'Transaction added.');
@@ -331,13 +376,15 @@ export default function App() {
       confirmLabel: 'Delete',
       onConfirm: async () => {
         try {
-          const res = await apiFetch(`/api/transactions/${id}`, {
+          const { queued, res } = await queuedApiFetch(`/api/transactions/${id}`, {
             method: 'DELETE',
             headers: {
               'x-csrf-token': getCookie('csrfToken')
             }
           });
-          if (res.ok) {
+          if (queued) {
+            pushToast('success', "You're offline — delete queued and will sync when you reconnect.");
+          } else if (res.ok) {
             await fetchInitialData();
             pushToast('success', 'Transaction deleted.');
           } else {
@@ -607,6 +654,18 @@ export default function App() {
         <header className="top-bar">
           <h1>{getPageTitle()}</h1>
           <div className="action-group" style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              )}
+            </button>
             <button className="btn btn-primary" onClick={() => setTxModal({ open: true, mode: 'add', data: null })} title="Add Transaction">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               <span className="btn-text-desktop">Add Transaction</span>
@@ -650,6 +709,9 @@ export default function App() {
                   onEdit={handleTxEditTrigger}
                   onDelete={handleTxDelete}
                   refreshKey={txRefreshKey}
+                  askConfirm={askConfirm}
+                  pushToast={pushToast}
+                  onChanged={fetchInitialData}
                 />
               </ErrorBoundary>
             )}

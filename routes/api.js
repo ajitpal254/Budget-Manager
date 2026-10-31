@@ -8,8 +8,11 @@ const Goal = require('../models/Goal');
 const User = require('../models/User');
 const Session = require('../models/Session');
 const PushSubscription = require('../models/PushSubscription');
+const RecurringTransaction = require('../models/RecurringTransaction');
 const { sendPushToUser } = require('../lib/push');
 const { hashToken } = require('../lib/tokens');
+const { runDueRecurring, isValidFrequency } = require('../lib/recurring');
+const { parsePagination } = require('../lib/pagination');
 const { authMiddleware, parseCookies, rateLimitMiddleware } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
@@ -202,6 +205,12 @@ router.post('/auth/login', rateLimitMiddleware(10, 15 * 60 * 1000), asyncHandler
 
   setAuthCookies(res, sessionToken, csrfToken);
 
+  // Fire-and-forget: materialize any due recurring transactions so the
+  // dashboard reflects them on this fresh sign-in. Never blocks the response.
+  runDueRecurring(user._id).catch(err =>
+    console.error('Recurring generation on login failed:', err)
+  );
+
   res.json({
     user: {
       _id: user._id,
@@ -247,6 +256,14 @@ const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   const { page: pageRaw, limit: limitRaw, search, type, category } = req.query;
 
+  // Materialize due recurring transactions first so dashboard aggregates and
+  // the ledger reflect them. Failures must never break the read itself.
+  try {
+    await runDueRecurring(req.user._id);
+  } catch (err) {
+    console.error('Recurring generation on transactions load failed:', err);
+  }
+
   const filter = { userId: req.user._id };
   if (type === 'income' || type === 'expense') {
     filter.type = type;
@@ -266,11 +283,7 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
     return res.json(transactions);
   }
 
-  let page = parseInt(pageRaw, 10);
-  let limit = parseInt(limitRaw, 10);
-  if (!Number.isInteger(page) || page < 1) page = 1;
-  if (!Number.isInteger(limit) || limit < 1) limit = 20;
-  limit = Math.min(limit, 100);
+  const { page, limit } = parsePagination(pageRaw, limitRaw);
 
   const total = await Transaction.countDocuments(filter);
   const transactions = await Transaction.find(filter)
@@ -278,6 +291,37 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
     .skip((page - 1) * limit)
     .limit(limit);
   res.json({ transactions, total, page, limit });
+}));
+
+// Quote a CSV field when it contains a comma, quote, or line break,
+// doubling any embedded quotes (RFC 4180).
+const escapeCsvField = (value) => {
+  const s = String(value ?? '');
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// GET /api/transactions/export — full CSV dump of the user's transactions
+// (no pagination; it is an export), oldest first.
+router.get('/transactions/export', authMiddleware, asyncHandler(async (req, res) => {
+  const transactions = await Transaction.find({ userId: req.user._id }).sort({ date: 1 });
+
+  const lines = ['date,description,category,type,amount'];
+  for (const t of transactions) {
+    const date = t.date ? new Date(t.date).toISOString().slice(0, 10) : '';
+    lines.push([
+      date,
+      escapeCsvField(t.description),
+      escapeCsvField(t.category),
+      t.type,
+      t.amount
+    ].join(','));
+  }
+
+  const filename = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  // BOM so Excel opens UTF-8 correctly.
+  res.send('\uFEFF' + lines.join('\n'));
 }));
 
 // Checks whether a newly saved expense pushed its category's total spend
@@ -377,6 +421,80 @@ router.delete('/transactions/:id', authMiddleware, asyncHandler(async (req, res)
     return res.status(404).json({ error: 'Transaction not found' });
   }
   res.json({ message: 'Transaction deleted successfully' });
+}));
+
+// --- RECURRING TRANSACTIONS (SCOPED TO AUTH USER) ---
+// Entries are templates; actual Transaction documents are materialized lazily
+// by runDueRecurring() on login and on transaction data loads.
+
+router.get('/recurring', authMiddleware, asyncHandler(async (req, res) => {
+  const items = await RecurringTransaction.find({ userId: req.user._id }).sort({ nextRunDate: 1 });
+  res.json(items);
+}));
+
+router.post('/recurring', authMiddleware, asyncHandler(async (req, res) => {
+  const { type, description, amount, category, frequency, nextRunDate, active } = req.body;
+
+  if (typeof description !== 'string' || typeof category !== 'string' ||
+      typeof type !== 'string' || typeof frequency !== 'string') {
+    return res.status(400).json({ error: 'Invalid input fields format' });
+  }
+  if (!isValidFrequency(frequency)) {
+    return res.status(400).json({ error: 'Frequency must be weekly, biweekly, monthly or yearly' });
+  }
+  const start = nextRunDate ? new Date(nextRunDate) : new Date();
+  if (isNaN(start.getTime())) {
+    return res.status(400).json({ error: 'Invalid next run date' });
+  }
+
+  const item = new RecurringTransaction({
+    userId: req.user._id,
+    type,
+    description,
+    amount,
+    category,
+    frequency,
+    nextRunDate: start,
+    active: active !== false
+  });
+  const saved = await item.save();
+  res.status(201).json(saved);
+}));
+
+router.patch('/recurring/:id', authMiddleware, asyncHandler(async (req, res) => {
+  const allowed = ['type', 'description', 'amount', 'category', 'frequency', 'nextRunDate', 'active'];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  if (updates.frequency !== undefined && !isValidFrequency(updates.frequency)) {
+    return res.status(400).json({ error: 'Frequency must be weekly, biweekly, monthly or yearly' });
+  }
+  if (updates.nextRunDate !== undefined) {
+    const d = new Date(updates.nextRunDate);
+    if (isNaN(d.getTime())) {
+      return res.status(400).json({ error: 'Invalid next run date' });
+    }
+    updates.nextRunDate = d;
+  }
+
+  const updated = await RecurringTransaction.findOneAndUpdate(
+    { _id: req.params.id, userId: req.user._id },
+    updates,
+    { new: true, runValidators: true }
+  );
+  if (!updated) {
+    return res.status(404).json({ error: 'Recurring transaction not found' });
+  }
+  res.json(updated);
+}));
+
+router.delete('/recurring/:id', authMiddleware, asyncHandler(async (req, res) => {
+  const deleted = await RecurringTransaction.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+  if (!deleted) {
+    return res.status(404).json({ error: 'Recurring transaction not found' });
+  }
+  res.json({ message: 'Recurring transaction deleted successfully' });
 }));
 
 // --- BUDGETS (SCOPED TO AUTH USER) ---

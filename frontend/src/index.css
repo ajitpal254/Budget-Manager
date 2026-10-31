@@ -7,6 +7,9 @@
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
+  --input-bg: rgba(15, 23, 42, 0.5);
+  --nav-bg: rgba(15, 23, 42, 0.9);
+  --toast-bg: rgba(20, 24, 40, 0.92);
   
   /* Color Accents & Gradients */
   --primary-gradient: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
@@ -24,6 +27,21 @@
   --radius-sm: 8px;
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   --blur: 16px;
+}
+
+/* Light theme: the default (:root) theme is the dark glass design and stays
+   exactly as-is. Setting data-theme="light" on <html> swaps the surfaces. */
+[data-theme="light"] {
+  --bg-color: #eef2f7;
+  --sidebar-bg: rgba(255, 255, 255, 0.72);
+  --card-bg: rgba(255, 255, 255, 0.85);
+  --card-border: rgba(15, 23, 42, 0.1);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --input-bg: rgba(255, 255, 255, 0.95);
+  --nav-bg: rgba(255, 255, 255, 0.94);
+  --toast-bg: rgba(255, 255, 255, 0.97);
 }
 
 * {
@@ -296,7 +314,7 @@ h1 {
   gap: 0.6rem;
   padding: 0.85rem 1.1rem;
   border-radius: 0.75rem;
-  background: rgba(20, 24, 40, 0.92);
+  background: var(--toast-bg);
   border: 1px solid rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
@@ -553,7 +571,7 @@ input, select {
   width: 100%;
   padding: 0.65rem 1rem;
   border-radius: var(--radius-sm);
-  background: rgba(15, 23, 42, 0.5);
+  background: var(--input-bg);
   border: 1px solid var(--card-border);
   color: var(--text-primary);
   font-family: inherit;
@@ -882,7 +900,7 @@ input:focus, select:focus {
     left: 0;
     width: 100vw;
     height: 72px;
-    background: rgba(15, 23, 42, 0.9);
+    background: var(--nav-bg);
     backdrop-filter: blur(var(--blur));
     -webkit-backdrop-filter: blur(var(--blur));
     border-top: 1px solid var(--card-border);
