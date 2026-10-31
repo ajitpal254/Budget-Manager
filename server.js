@@ -7,6 +7,10 @@ const apiRoutes = require('./routes/api');
 const { parseCookies, rateLimitMiddleware, csrfMiddleware } = require('./middleware/auth');
 
 const app = express();
+app.disable('x-powered-by'); // Don't leak the framework/version in response headers
+// Render sits behind a reverse proxy: trust the first hop so req.ip is the
+// real client IP (the rate limiter keys on it) instead of the proxy address.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/budget-manager';
 
@@ -51,6 +55,7 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   res.setHeader('Content-Security-Policy', 
     "default-src 'self'; " +
     "script-src 'self'; " + // No unsafe-inline for scripts
@@ -94,6 +99,13 @@ async function runMigrations() {
     const Goal = require('./models/Goal');
     const crypto = require('crypto');
 
+    // Constant-time hex comparison so hash checks don't leak via timing.
+    const safeHashEquals = (a, b) => {
+      const bufA = Buffer.from(String(a), 'utf8');
+      const bufB = Buffer.from(String(b), 'utf8');
+      return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+    };
+
     let user = null;
 
     // 1. Optional one-time seed user (opt-in only)
@@ -123,7 +135,7 @@ async function runMigrations() {
           // password from env when it differs, so .env stays the source of truth.
           const iterations = user.hashIterations || 1000;
           const currentHash = crypto.pbkdf2Sync(seedPassword, user.passwordSalt, iterations, 64, 'sha512').toString('hex');
-          if (currentHash !== user.passwordHash) {
+          if (!safeHashEquals(currentHash, user.passwordHash)) {
             console.log('Migration: Seed user exists — updating password from env...');
             const salt = crypto.randomBytes(16).toString('hex');
             user.passwordSalt = salt;

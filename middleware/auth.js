@@ -17,10 +17,12 @@ const parseCookies = (cookieHeader) => {
 };
 
 // 1. Rate Limiting Middleware (IP-based, in-memory)
+// NOTE: requires `app.set('trust proxy', 1)` (set in server.js) so req.ip is
+// the real client IP behind Render's reverse proxy.
 const rateLimitStore = {};
 const rateLimitMiddleware = (limit = 150, windowMs = 15 * 60 * 1000) => {
   return (req, res, next) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const ip = req.ip || req.socket.remoteAddress;
     const now = Date.now();
 
     if (!rateLimitStore[ip]) {

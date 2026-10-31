@@ -10,7 +10,7 @@ const Session = require('../models/Session');
 const PushSubscription = require('../models/PushSubscription');
 const { sendPushToUser } = require('../lib/push');
 const { hashToken } = require('../lib/tokens');
-const { authMiddleware, parseCookies } = require('../middleware/auth');
+const { authMiddleware, parseCookies, rateLimitMiddleware } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
 const asyncHandler = fn => (req, res, next) => {
@@ -26,6 +26,17 @@ const LEGACY_PBKDF2_ITERATIONS = 1000;
 const hashPassword = (password, salt, iterations = PBKDF2_ITERATIONS) => {
   return crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
 };
+
+// Constant-time comparison so hash validity isn't leaked via response timing.
+const safeHashEquals = (a, b) => {
+  const bufA = Buffer.from(String(a), 'utf8');
+  const bufB = Buffer.from(String(b), 'utf8');
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+};
+
+// Fixed salt used only to burn PBKDF2 time on the login not-found path, so
+// response timing doesn't reveal whether an email is registered.
+const DUMMY_SALT = '00000000000000000000000000000000';
 
 const generateSalt = () => {
   return crypto.randomBytes(16).toString('hex');
@@ -144,7 +155,9 @@ router.post('/auth/register', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/auth/login
-router.post('/auth/login', asyncHandler(async (req, res) => {
+// Stricter per-route rate limit (10 attempts / 15 min / IP) on top of the
+// global /api limiter, to slow credential stuffing.
+router.post('/auth/login', rateLimitMiddleware(10, 15 * 60 * 1000), asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
   if (typeof email !== 'string' || typeof password !== 'string') {
@@ -153,7 +166,9 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
 
   const user = await User.findOne({ email: email.toLowerCase().trim() });
   if (!user) {
-    // Prevent username enumeration by returning a generic error
+    // Burn the same PBKDF2 cost as a real check so response time doesn't
+    // reveal whether the email is registered. Generic error in both cases.
+    hashPassword(password, DUMMY_SALT);
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
@@ -161,7 +176,7 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
   // so hashes made before the hardening upgrade still validate.
   const iterations = user.hashIterations || LEGACY_PBKDF2_ITERATIONS;
   const computedHash = hashPassword(password, user.passwordSalt, iterations);
-  if (computedHash !== user.passwordHash) {
+  if (!safeHashEquals(computedHash, user.passwordHash)) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
@@ -216,7 +231,8 @@ router.get('/auth/me', authMiddleware, asyncHandler(async (req, res) => {
   const isProd = process.env.NODE_ENV === 'production';
   res.cookie('csrfToken', csrfToken, {
     secure: isProd,
-    sameSite: 'lax',
+    // Must match setAuthCookies: cross-origin frontend needs SameSite=None in prod.
+    sameSite: isProd ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 
