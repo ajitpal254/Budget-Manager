@@ -1,14 +1,11 @@
 import React from 'react';
+import { computeBudgetStatus } from '../budgetAlerts.js';
 
 export default function Budgets({ budgets, transactions, formatCurrency, onAddTrigger, onDelete }) {
-  // Calculate total spent in each category from transaction lists
-  const categorySpends = {};
-  transactions.forEach(t => {
-    if (t.type === 'expense') {
-      const cat = t.category.trim();
-      categorySpends[cat] = (categorySpends[cat] || 0) + t.amount;
-    }
-  });
+  // Per-category spend vs. limit, with warning (>=80%) / danger (>=100%) status
+  const statuses = computeBudgetStatus(budgets, transactions);
+  const statusByCategory = {};
+  statuses.forEach(s => { statusByCategory[s.budget.category] = s; });
 
   return (
     <div className="tab-view active">
@@ -20,9 +17,10 @@ export default function Budgets({ budgets, transactions, formatCurrency, onAddTr
       </div>
 
       <div className="budgets-grid">
-        {budgets.map((b, idx) => {
-          const spent = categorySpends[b.category] || 0;
-          const percent = Math.min(100, b.limit > 0 ? (spent / b.limit) * 100 : 0);
+        {statuses.map((s, idx) => {
+          const b = s.budget;
+          const spent = s.spent;
+          const percent = Math.min(100, s.percent);
           const remaining = b.limit - spent;
 
           // Compute color thresholds
@@ -39,6 +37,14 @@ export default function Budgets({ budgets, transactions, formatCurrency, onAddTr
                 <span className="budget-cat">{b.category}</span>
                 <span className="budget-limit-label">Limit: {formatCurrency(b.limit)}</span>
               </div>
+
+              {s.status !== 'ok' && (
+                <span className={`alert-badge ${s.status === 'danger' ? 'alert-danger' : 'alert-warning'}`}>
+                  {s.status === 'danger'
+                    ? `Over budget by ${formatCurrency(spent - b.limit)}`
+                    : `${Math.round(s.percent)}% of budget used`}
+                </span>
+              )}
 
               <div className="budget-progress-container">
                 <div className="progress-track">

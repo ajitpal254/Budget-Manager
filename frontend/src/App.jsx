@@ -1,15 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Dashboard from './components/Dashboard';
 import Transactions from './components/Transactions';
 import Budgets from './components/Budgets';
 import Goals from './components/Goals';
 import Auth from './components/Auth';
+import ErrorBoundary from './components/ErrorBoundary';
+import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './components/Skeletons';
+import { computeBudgetStatus } from './budgetAlerts.js';
 import { apiFetch, getCookie } from './api.js';
 
 export default function App() {
   // State variables
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  // True only while the first data fetch after sign-in runs; drives skeletons.
+  const [initialLoading, setInitialLoading] = useState(false);
   const [tab, setTab] = useState('dashboard');
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
@@ -31,6 +36,35 @@ export default function App() {
     }, 4000);
   };
   const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  // Tracks per-budget alert status across data loads so toasts fire only
+  // when a threshold is newly crossed, not on every refresh.
+  const prevBudgetStatuses = useRef({});
+  const alertsInitialized = useRef(false);
+
+  const checkBudgetAlerts = (nextBudgets, nextTransactions) => {
+    const statuses = computeBudgetStatus(nextBudgets, nextTransactions);
+    if (!alertsInitialized.current) {
+      // First load: record the current state silently instead of toasting for it.
+      alertsInitialized.current = true;
+    } else {
+      statuses.forEach(s => {
+        const key = s.budget._id || s.budget.category;
+        const prev = prevBudgetStatuses.current[key];
+        if (prev !== s.status && s.status !== 'ok') {
+          pushToast(
+            s.status === 'danger' ? 'error' : 'warning',
+            s.status === 'danger'
+              ? `Budget alert: "${s.budget.category}" is over its limit.`
+              : `Budget alert: "${s.budget.category}" has used ${Math.round(s.percent)}% of its limit.`
+          );
+        }
+      });
+    }
+    const next = {};
+    statuses.forEach(s => { next[s.budget._id || s.budget.category] = s.status; });
+    prevBudgetStatuses.current = next;
+  };
 
   // Generic confirmation dialog (used for deletes)
   const [confirmDialog, setConfirmDialog] = useState({
@@ -70,7 +104,7 @@ export default function App() {
         setUser(data.user);
         setDbStatus('connected');
         // Fetch data
-        await fetchInitialData();
+        await loadInitialData();
       } else {
         setUser(null);
         setDbStatus('connected');
@@ -93,22 +127,40 @@ export default function App() {
         apiFetch('/api/goals')
       ]);
 
+      let txs = [];
+      let bds = [];
       if (txRes.ok) {
-        const txs = await txRes.json();
+        txs = await txRes.json();
         setTransactions(txs);
       }
-      
-      if (budgetRes.ok) setBudgets(await budgetRes.json());
+
+      if (budgetRes.ok) {
+        bds = await budgetRes.json();
+        setBudgets(bds);
+      }
       if (goalRes.ok) setGoals(await goalRes.json());
+
+      checkBudgetAlerts(bds, txs);
     } catch (err) {
       console.error('Error fetching backend data:', err);
+    }
+  };
+
+  // First data fetch after sign-in: shows skeleton placeholders instead of
+  // a blank wait. Later refetches (after CRUD) update silently.
+  const loadInitialData = async () => {
+    setInitialLoading(true);
+    try {
+      await fetchInitialData();
+    } finally {
+      setInitialLoading(false);
     }
   };
 
   // --- AUTH HANDLERS ---
   const handleAuthSuccess = (userData) => {
     setUser(userData);
-    fetchInitialData();
+    loadInitialData();
   };
 
   const handleLogout = async () => {
@@ -122,11 +174,29 @@ export default function App() {
     } catch (err) {
       console.error('Logout request failed:', err);
     }
+    // Reset all app state instead of reloading the page, so the PWA shell
+    // stays alive and there is no flash. The Auth view renders once user
+    // is null.
     setUser(null);
+    setTab('dashboard');
     setTransactions([]);
     setBudgets([]);
     setGoals([]);
-    window.location.reload(); // Hard reload page to clear state/caches completely
+    setTxModal({ open: false, mode: 'add', data: null });
+    setBudgetModal({ open: false, data: null });
+    setGoalModal({ open: false, mode: 'add', data: null });
+    setConfirmDialog({ open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null });
+    setToasts([]);
+    setDbStatus('connecting');
+    prevBudgetStatuses.current = {};
+    alertsInitialized.current = false;
+    // The logout cleared the CSRF cookie; fetch a fresh guest token so the
+    // login/register form can submit again without a page reload.
+    try {
+      await apiFetch('/api/auth/csrf-token');
+    } catch (err) {
+      console.error('CSRF token refresh failed:', err);
+    }
   };
 
   // --- HELPER FORMATTERS ---
@@ -473,42 +543,62 @@ export default function App() {
           </div>
         </header>
 
-        {/* Tab content switching */}
-        {tab === 'dashboard' && (
-          <Dashboard
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            setTab={setTab}
-          />
-        )}
-        {tab === 'transactions' && (
-          <Transactions
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            onEdit={handleTxEditTrigger}
-            onDelete={handleTxDelete}
-          />
-        )}
-        {tab === 'budgets' && (
-          <Budgets
-            budgets={budgets}
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            onAddTrigger={() => setBudgetModal({ open: true, data: null })}
-            onDelete={handleBudgetDelete}
-          />
-        )}
-        {tab === 'goals' && (
-          <Goals
-            goals={goals}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            onAddTrigger={() => setGoalModal({ open: true, mode: 'add', data: null })}
-            onEdit={handleGoalEditTrigger}
-            onDelete={handleGoalDelete}
-          />
+        {/* Tab content switching.
+            Skeletons show during the first data fetch; each tab is wrapped
+            in its own error boundary so one crashing widget can't blank
+            the whole app. */}
+        {initialLoading ? (
+          tab === 'dashboard' ? <DashboardSkeleton /> :
+          tab === 'transactions' ? <TransactionsSkeleton /> :
+          <GridSkeleton />
+        ) : (
+          <>
+            {tab === 'dashboard' && (
+              <ErrorBoundary key="dashboard">
+                <Dashboard
+                  transactions={transactions}
+                  budgets={budgets}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  setTab={setTab}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'transactions' && (
+              <ErrorBoundary key="transactions">
+                <Transactions
+                  transactions={transactions}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  onEdit={handleTxEditTrigger}
+                  onDelete={handleTxDelete}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'budgets' && (
+              <ErrorBoundary key="budgets">
+                <Budgets
+                  budgets={budgets}
+                  transactions={transactions}
+                  formatCurrency={formatCurrency}
+                  onAddTrigger={() => setBudgetModal({ open: true, data: null })}
+                  onDelete={handleBudgetDelete}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'goals' && (
+              <ErrorBoundary key="goals">
+                <Goals
+                  goals={goals}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  onAddTrigger={() => setGoalModal({ open: true, mode: 'add', data: null })}
+                  onEdit={handleGoalEditTrigger}
+                  onDelete={handleGoalDelete}
+                />
+              </ErrorBoundary>
+            )}
+          </>
         )}
       </main>
 
