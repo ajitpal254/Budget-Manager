@@ -14,6 +14,9 @@ export default defineConfig({
         // SPA fallback for client-side routes, but never for API calls
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api/],
+        // Pull the push-notification handlers into the generated worker.
+        // push-sw.js is copied from frontend/public into the build output.
+        importScripts: ['/push-sw.js'],
       },
       manifest: {
         name: 'Aura Budget - Premium Money Manager',

@@ -7,6 +7,7 @@ import Auth from './components/Auth';
 import ErrorBoundary from './components/ErrorBoundary';
 import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './components/Skeletons';
 import { computeBudgetStatus } from './budgetAlerts.js';
+import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
 
 export default function App() {
@@ -76,6 +77,39 @@ export default function App() {
 
   // Per-form submit state (prevents double-submits, drives button labels)
   const [saving, setSaving] = useState({ tx: false, budget: false, goal: false });
+
+  // Push-notification opt-in banner: shown once to signed-in users on
+  // browsers that support Web Push, until they decide.
+  const [pushBannerVisible, setPushBannerVisible] = useState(false);
+  const [enablingPush, setEnablingPush] = useState(false);
+
+  useEffect(() => {
+    if (user && shouldShowPushPrompt()) {
+      setPushBannerVisible(true);
+    } else {
+      setPushBannerVisible(false);
+    }
+  }, [user]);
+
+  const handleEnablePush = async () => {
+    if (enablingPush) return;
+    setEnablingPush(true);
+    try {
+      const result = await enablePushNotifications();
+      pushToast(result.ok ? 'success' : 'error', result.message);
+    } catch (err) {
+      console.error('Push opt-in failed:', err);
+      pushToast('error', 'Could not enable notifications. Please try again.');
+    } finally {
+      setEnablingPush(false);
+      setPushBannerVisible(false);
+    }
+  };
+
+  const handleDismissPush = () => {
+    dismissPushPrompt();
+    setPushBannerVisible(false);
+  };
 
   // Initial load
   useEffect(() => {
@@ -529,6 +563,22 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="main-content">
+        {pushBannerVisible && (
+          <div className="push-banner glass-card" role="region" aria-label="Notification opt-in">
+            <div className="push-banner-text">
+              <strong>Get budget alerts on this device</strong>
+              <span>We&apos;ll notify you when a category hits 80% or 100% of its budget.</span>
+            </div>
+            <div className="push-banner-actions">
+              <button className="btn btn-primary" onClick={handleEnablePush} disabled={enablingPush}>
+                {enablingPush ? 'Enabling…' : 'Enable'}
+              </button>
+              <button className="btn btn-text" onClick={handleDismissPush}>
+                Not now
+              </button>
+            </div>
+          </div>
+        )}
         <header className="top-bar">
           <h1>{getPageTitle()}</h1>
           <div className="action-group" style={{ display: 'flex', gap: '0.5rem' }}>

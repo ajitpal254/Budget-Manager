@@ -7,6 +7,8 @@ const Budget = require('../models/Budget');
 const Goal = require('../models/Goal');
 const User = require('../models/User');
 const Session = require('../models/Session');
+const PushSubscription = require('../models/PushSubscription');
+const { sendPushToUser } = require('../lib/push');
 const { authMiddleware, parseCookies } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
@@ -227,6 +229,41 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   res.json(transactions);
 }));
 
+// Checks whether a newly saved expense pushed its category's total spend
+// across the 80% (warning) or 100% (danger) budget threshold, and notifies
+// the user's subscribed devices if so. Resolves silently when there is no
+// budget for the category or no threshold was crossed.
+async function checkBudgetThreshold(savedTx) {
+  const budget = await Budget.findOne({
+    userId: savedTx.userId,
+    category: savedTx.category
+  });
+  if (!budget || !(budget.limit > 0)) return;
+
+  const agg = await Transaction.aggregate([
+    { $match: { userId: savedTx.userId, type: 'expense', category: savedTx.category } },
+    { $group: { _id: null, total: { $sum: '$amount' } } }
+  ]);
+  const total = agg.length ? agg[0].total : 0;
+  const pctBefore = ((total - savedTx.amount) / budget.limit) * 100;
+  const pctNow = (total / budget.limit) * 100;
+
+  const crossedWarning = pctBefore < 80 && pctNow >= 80;
+  const crossedDanger = pctBefore < 100 && pctNow >= 100;
+  if (!crossedWarning && !crossedDanger) return;
+
+  const over = crossedDanger;
+  await sendPushToUser(savedTx.userId, {
+    title: over
+      ? `Budget alert: ${savedTx.category} over limit`
+      : `Budget alert: ${savedTx.category} at ${Math.round(pctNow)}%`,
+    body: over
+      ? `You've spent ${total.toFixed(2)} of your ${budget.limit.toFixed(2)} budget.`
+      : `You've used ${Math.round(pctNow)}% of your ${budget.limit.toFixed(2)} budget.`,
+    url: '/'
+  });
+}
+
 router.post('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   const { description, amount, type, category, date } = req.body;
   
@@ -243,6 +280,16 @@ router.post('/transactions', authMiddleware, asyncHandler(async (req, res) => {
     date
   });
   const saved = await transaction.save();
+
+  // Fire-and-forget budget alert: if this expense newly pushes the
+  // category's total spend across 80% or 100% of its budget limit,
+  // notify the user's subscribed devices. Never blocks the response.
+  if (saved.type === 'expense') {
+    checkBudgetThreshold(saved).catch(err =>
+      console.error('Budget push check failed:', err)
+    );
+  }
+
   res.status(201).json(saved);
 }));
 
@@ -358,6 +405,45 @@ router.delete('/goals/:id', authMiddleware, asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Goal not found' });
   }
   res.json({ message: 'Goal deleted successfully' });
+}));
+
+// --- PUSH NOTIFICATIONS ---
+
+// Public: the client needs the VAPID public key before it can subscribe.
+// 503 when push isn't configured so the UI can hide the opt-in.
+router.get('/push/vapid-public-key', (req, res) => {
+  if (!process.env.VAPID_PUBLIC_KEY) {
+    return res.status(503).json({ error: 'Push notifications are not configured.' });
+  }
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+});
+
+// Save (or refresh) a device's push subscription. Upserted by endpoint so
+// re-subscribing from the same device never creates duplicates.
+router.post('/push/subscribe', authMiddleware, asyncHandler(async (req, res) => {
+  const { endpoint, keys } = req.body || {};
+  if (
+    typeof endpoint !== 'string' || !endpoint ||
+    !keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string'
+  ) {
+    return res.status(400).json({ error: 'Invalid push subscription.' });
+  }
+  await PushSubscription.findOneAndUpdate(
+    { endpoint },
+    { userId: req.user._id, endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } },
+    { upsert: true, new: true }
+  );
+  res.status(201).json({ message: 'Push subscription saved.' });
+}));
+
+// Remove a device's push subscription (e.g. when the user opts out).
+router.delete('/push/unsubscribe', authMiddleware, asyncHandler(async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string' || !endpoint) {
+    return res.status(400).json({ error: 'Invalid endpoint.' });
+  }
+  await PushSubscription.deleteOne({ endpoint, userId: req.user._id });
+  res.json({ message: 'Push subscription removed.' });
 }));
 
 module.exports = router;
