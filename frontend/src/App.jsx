@@ -21,9 +21,45 @@ export default function App() {
   const [budgetModal, setBudgetModal] = useState({ open: false, data: null });
   const [goalModal, setGoalModal] = useState({ open: false, mode: 'add', data: null });
 
+  // Toast notifications: [{ id, type: 'success' | 'error', message }]
+  const [toasts, setToasts] = useState([]);
+  const pushToast = (type, message) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
+  const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  // Generic confirmation dialog (used for deletes)
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null
+  });
+  const askConfirm = ({ title, message, confirmLabel = 'Delete', onConfirm }) =>
+    setConfirmDialog({ open: true, title, message, confirmLabel, onConfirm });
+  const closeConfirm = () => setConfirmDialog(d => ({ ...d, open: false, onConfirm: null }));
+
+  // Per-form submit state (prevents double-submits, drives button labels)
+  const [saving, setSaving] = useState({ tx: false, budget: false, goal: false });
+
   // Initial load
   useEffect(() => {
     checkAuth();
+  }, []);
+
+  // Close any open modal/dialog with the Escape key
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setTxModal({ open: false, mode: 'add', data: null });
+        setBudgetModal({ open: false, data: null });
+        setGoalModal({ open: false, mode: 'add', data: null });
+        setConfirmDialog(d => ({ ...d, open: false, onConfirm: null }));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const checkAuth = async () => {
@@ -114,6 +150,8 @@ export default function App() {
   // --- TRANSACTION CRUD ---
   const handleTxSubmit = async (e) => {
     e.preventDefault();
+    if (saving.tx) return;
+    setSaving(s => ({ ...s, tx: true }));
     const formData = new FormData(e.target);
     const id = formData.get('id');
     const payload = {
@@ -148,26 +186,46 @@ export default function App() {
       if (res.ok) {
         setTxModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
+        pushToast('success', id ? 'Transaction updated.' : 'Transaction added.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save transaction.');
       }
     } catch (err) {
       console.error('Error saving transaction:', err);
+      pushToast('error', 'Could not save transaction. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, tx: false }));
     }
   };
 
-  const handleTxDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/transactions/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleTxDelete = (id) => {
+    const t = transactions.find(tx => tx._id === id);
+    askConfirm({
+      title: 'Delete transaction?',
+      message: `This will permanently delete "${t?.description || 'this transaction'}"${t ? ` (${formatCurrency(t.amount)})` : ''}. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/transactions/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Transaction deleted.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not delete transaction.');
+          }
+        } catch (err) {
+          console.error('Error deleting transaction:', err);
+          pushToast('error', 'Could not delete transaction. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting transaction:', err);
-    }
+    });
   };
 
   const handleTxEditTrigger = (t) => {
@@ -177,6 +235,8 @@ export default function App() {
   // --- BUDGETS CRUD ---
   const handleBudgetSubmit = async (e) => {
     e.preventDefault();
+    if (saving.budget) return;
+    setSaving(s => ({ ...s, budget: true }));
     const formData = new FormData(e.target);
     const payload = {
       category: formData.get('category').trim(),
@@ -196,31 +256,53 @@ export default function App() {
       if (res.ok) {
         setBudgetModal({ open: false, data: null });
         await fetchInitialData();
+        pushToast('success', `Budget for "${payload.category}" saved.`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save budget.');
       }
     } catch (err) {
       console.error('Error saving budget:', err);
+      pushToast('error', 'Could not save budget. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, budget: false }));
     }
   };
 
-  const handleBudgetDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/budgets/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleBudgetDelete = (id) => {
+    const b = budgets.find(budget => budget._id === id);
+    askConfirm({
+      title: 'Remove budget?',
+      message: `This will remove the budget limit for "${b?.category || 'this category'}". Your transactions will not be affected.`,
+      confirmLabel: 'Remove',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/budgets/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Budget removed.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not remove budget.');
+          }
+        } catch (err) {
+          console.error('Error deleting budget:', err);
+          pushToast('error', 'Could not remove budget. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting budget:', err);
-    }
+    });
   };
 
   // --- GOALS CRUD ---
   const handleGoalSubmit = async (e) => {
     e.preventDefault();
+    if (saving.goal) return;
+    setSaving(s => ({ ...s, goal: true }));
     const formData = new FormData(e.target);
     const id = formData.get('id');
     const deadlineVal = formData.get('deadline');
@@ -255,26 +337,46 @@ export default function App() {
       if (res.ok) {
         setGoalModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
+        pushToast('success', id ? 'Goal updated.' : 'Goal created.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save goal.');
       }
     } catch (err) {
       console.error('Error saving goal:', err);
+      pushToast('error', 'Could not save goal. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, goal: false }));
     }
   };
 
-  const handleGoalDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/goals/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleGoalDelete = (id) => {
+    const g = goals.find(goal => goal._id === id);
+    askConfirm({
+      title: 'Remove goal?',
+      message: `This will permanently remove the "${g?.name || 'this'}" savings goal. This cannot be undone.`,
+      confirmLabel: 'Remove',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/goals/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Goal removed.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not remove goal.');
+          }
+        } catch (err) {
+          console.error('Error deleting goal:', err);
+          pushToast('error', 'Could not remove goal. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting goal:', err);
-    }
+    });
   };
 
   const handleGoalEditTrigger = (g) => {
@@ -512,8 +614,8 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setTxModal({ open: false, mode: 'add', data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save
+              <button type="submit" className="btn btn-primary" disabled={saving.tx}>
+                {saving.tx ? 'Saving…' : 'Save'}
               </button>
             </div>
           </form>
@@ -554,8 +656,8 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setBudgetModal({ open: false, data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save Budget
+              <button type="submit" className="btn btn-primary" disabled={saving.budget}>
+                {saving.budget ? 'Saving…' : 'Save Budget'}
               </button>
             </div>
           </form>
@@ -622,12 +724,47 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setGoalModal({ open: false, mode: 'add', data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save Goal
+              <button type="submit" className="btn btn-primary" disabled={saving.goal}>
+                {saving.goal ? 'Saving…' : 'Save Goal'}
               </button>
             </div>
           </form>
         </div>
+      </div>
+
+      {/* Delete confirmation dialog */}
+      <div className={`modal ${confirmDialog.open ? 'show' : ''}`} role="dialog" aria-hidden={!confirmDialog.open}>
+        <div className="modal-content glass-card" style={{ maxWidth: '420px' }}>
+          <div className="modal-header">
+            <h3>{confirmDialog.title}</h3>
+            <button className="btn-close" onClick={closeConfirm}>&times;</button>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: 1.6, margin: 0 }}>
+            {confirmDialog.message}
+          </p>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={closeConfirm}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => { closeConfirm(); if (confirmDialog.onConfirm) confirmDialog.onConfirm(); }}
+            >
+              {confirmDialog.confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Toast notifications */}
+      <div className="toast-container" aria-live="polite">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismissToast(t.id)}>
+            <span className="toast-dot" />
+            <span>{t.message}</span>
+          </div>
+        ))}
       </div>
 
     </div>
