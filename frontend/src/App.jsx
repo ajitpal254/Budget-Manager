@@ -10,6 +10,7 @@ import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './compone
 import { computeBudgetStatus } from './budgetAlerts.js';
 import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
+import { queuedApiFetch, replayOutbox } from './offlineQueue.js';
 
 export default function App() {
   // State variables
@@ -210,6 +211,26 @@ export default function App() {
     }
   };
 
+  // Offline outbox: replay any queued transaction mutations whenever the
+  // user signs in (covers queue left from a previous session) and whenever
+  // the browser reports coming back online.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const syncOutbox = async () => {
+      const synced = await replayOutbox();
+      if (cancelled || synced === 0) return;
+      pushToast('success', `${synced} offline change${synced === 1 ? '' : 's'} synced.`);
+      await fetchInitialData();
+    };
+    syncOutbox();
+    window.addEventListener('online', syncOutbox);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', syncOutbox);
+    };
+  }, [user]);
+
   // --- AUTH HANDLERS ---
   const handleAuthSuccess = (userData) => {
     setUser(userData);
@@ -288,26 +309,31 @@ export default function App() {
 
     try {
       let res;
+      let queued = false;
       const headers = {
         'Content-Type': 'application/json',
         'x-csrf-token': getCookie('csrfToken')
       };
 
       if (id) {
-        res = await apiFetch(`/api/transactions/${id}`, {
+        ({ queued, res } = await queuedApiFetch(`/api/transactions/${id}`, {
           method: 'PUT',
           headers,
           body: JSON.stringify(payload)
-        });
+        }));
       } else {
-        res = await apiFetch('/api/transactions', {
+        ({ queued, res } = await queuedApiFetch('/api/transactions', {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
-        });
+        }));
       }
 
-      if (res.ok) {
+      if (queued) {
+        // Offline: the change is in the local outbox and will sync later.
+        setTxModal({ open: false, mode: 'add', data: null });
+        pushToast('success', "You're offline — change saved and will sync when you reconnect.");
+      } else if (res.ok) {
         setTxModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
         pushToast('success', id ? 'Transaction updated.' : 'Transaction added.');
@@ -331,13 +357,15 @@ export default function App() {
       confirmLabel: 'Delete',
       onConfirm: async () => {
         try {
-          const res = await apiFetch(`/api/transactions/${id}`, {
+          const { queued, res } = await queuedApiFetch(`/api/transactions/${id}`, {
             method: 'DELETE',
             headers: {
               'x-csrf-token': getCookie('csrfToken')
             }
           });
-          if (res.ok) {
+          if (queued) {
+            pushToast('success', "You're offline — delete queued and will sync when you reconnect.");
+          } else if (res.ok) {
             await fetchInitialData();
             pushToast('success', 'Transaction deleted.');
           } else {

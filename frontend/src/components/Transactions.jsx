@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../api';
+import { getPendingCount, onOutboxChange } from '../offlineQueue';
 import Recurring from './Recurring';
 
 const PAGE_SIZE = 8;
@@ -15,6 +16,10 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
   const [currentPage, setCurrentPage] = useState(1);
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+
+  // Offline outbox indicator: re-reads whenever the queue changes.
+  const [pendingCount, setPendingCount] = useState(() => getPendingCount());
+  useEffect(() => onOutboxChange(() => setPendingCount(getPendingCount())), []);
 
   // Retrieve unique categories from the full dataset so the filter
   // dropdown stays complete regardless of the current page.
@@ -114,6 +119,22 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
           Export CSV
         </button>
       </div>
+      {pendingCount > 0 && (
+        <div
+          role="status"
+          style={{
+            marginBottom: '1rem',
+            padding: '0.6rem 1rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            color: 'var(--text-primary)',
+            fontSize: '0.9rem'
+          }}
+        >
+          {pendingCount} offline change{pendingCount === 1 ? '' : 's'} pending — will sync when you&rsquo;re back online.
+        </div>
+      )}
       {/* Filtering Box */}
       <div className="card glass-card filter-card">
         <div className="filter-row">
