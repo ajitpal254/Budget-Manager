@@ -9,6 +9,7 @@ const User = require('../models/User');
 const Session = require('../models/Session');
 const PushSubscription = require('../models/PushSubscription');
 const { sendPushToUser } = require('../lib/push');
+const { hashToken } = require('../lib/tokens');
 const { authMiddleware, parseCookies } = require('../middleware/auth');
 
 // Helper wrapper for async routes to catch errors and pass to Express handler
@@ -125,7 +126,7 @@ router.post('/auth/register', asyncHandler(async (req, res) => {
 
   const session = new Session({
     userId: newUser._id,
-    token: sessionToken,
+    token: hashToken(sessionToken),
     expiresAt
   });
   await session.save();
@@ -179,7 +180,7 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
 
   const session = new Session({
     userId: user._id,
-    token: sessionToken,
+    token: hashToken(sessionToken),
     expiresAt
   });
   await session.save();
@@ -201,7 +202,7 @@ router.post('/auth/logout', asyncHandler(async (req, res) => {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies['sessionToken'];
   if (token) {
-    await Session.deleteOne({ token });
+    await Session.deleteOne({ token: hashToken(token) });
   }
 
   clearAuthCookies(res);
@@ -224,9 +225,43 @@ router.get('/auth/me', authMiddleware, asyncHandler(async (req, res) => {
 
 // --- TRANSACTIONS (SCOPED TO AUTH USER) ---
 
+// Escape user input before embedding it in a RegExp.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
-  const transactions = await Transaction.find({ userId: req.user._id }).sort({ date: -1 });
-  res.json(transactions);
+  const { page: pageRaw, limit: limitRaw, search, type, category } = req.query;
+
+  const filter = { userId: req.user._id };
+  if (type === 'income' || type === 'expense') {
+    filter.type = type;
+  }
+  if (typeof category === 'string' && category.trim()) {
+    // Case-insensitive exact match, preserving the old client-side behavior.
+    filter.category = { $regex: `^${escapeRegExp(category.trim())}$`, $options: 'i' };
+  }
+  if (typeof search === 'string' && search.trim()) {
+    filter.description = { $regex: escapeRegExp(search.trim()), $options: 'i' };
+  }
+
+  // Backward compatibility: without page/limit params the endpoint returns
+  // the plain array exactly as before (the Dashboard aggregates need it all).
+  if (pageRaw === undefined && limitRaw === undefined) {
+    const transactions = await Transaction.find(filter).sort({ date: -1 });
+    return res.json(transactions);
+  }
+
+  let page = parseInt(pageRaw, 10);
+  let limit = parseInt(limitRaw, 10);
+  if (!Number.isInteger(page) || page < 1) page = 1;
+  if (!Number.isInteger(limit) || limit < 1) limit = 20;
+  limit = Math.min(limit, 100);
+
+  const total = await Transaction.countDocuments(filter);
+  const transactions = await Transaction.find(filter)
+    .sort({ date: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
+  res.json({ transactions, total, page, limit });
 }));
 
 // Checks whether a newly saved expense pushed its category's total spend
