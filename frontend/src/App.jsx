@@ -650,6 +650,9 @@ export default function App() {
                   onEdit={handleTxEditTrigger}
                   onDelete={handleTxDelete}
                   refreshKey={txRefreshKey}
+                  askConfirm={askConfirm}
+                  pushToast={pushToast}
+                  onChanged={fetchInitialData}
                 />
               </ErrorBoundary>
             )}

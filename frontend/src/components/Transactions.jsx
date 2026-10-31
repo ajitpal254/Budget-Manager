@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../api';
+import Recurring from './Recurring';
 
 const PAGE_SIZE = 8;
 
@@ -7,7 +8,7 @@ const PAGE_SIZE = 8;
 // (the full array App fetches for the Dashboard/Budgets views) is only used
 // to build the complete category dropdown; rows and the pager come from the
 // paginated endpoint response.
-export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete, refreshKey }) {
+export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete, refreshKey, askConfirm, pushToast, onChanged }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -195,6 +196,15 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
           </div>
         </div>
       </div>
+
+      {/* Recurring templates: managed here, materialized by the backend */}
+      <Recurring
+        formatCurrency={formatCurrency}
+        formatDate={formatDate}
+        askConfirm={askConfirm}
+        pushToast={pushToast}
+        onChanged={onChanged}
+      />
     </div>
   );
 }
