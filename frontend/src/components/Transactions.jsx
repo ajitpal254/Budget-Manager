@@ -1,36 +1,73 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { apiFetch } from '../api';
 
-export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete }) {
+const PAGE_SIZE = 8;
+
+// The ledger now pages and filters on the server. The `transactions` prop
+// (the full array App fetches for the Dashboard/Budgets views) is only used
+// to build the complete category dropdown; rows and the pager come from the
+// paginated endpoint response.
+export default function Transactions({ transactions, formatCurrency, formatDate, onEdit, onDelete, refreshKey }) {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 8;
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
 
-  // Retrieve unique categories in dataset
+  // Retrieve unique categories from the full dataset so the filter
+  // dropdown stays complete regardless of the current page.
   const categories = useMemo(() => {
-    return Array.from(new Set(transactions.map(t => t.category)));
+    return Array.from(new Set((transactions || []).map(t => t.category)));
   }, [transactions]);
 
-  // Apply filters in memory
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => {
-      const matchesSearch = t.description.toLowerCase().includes(search.toLowerCase());
-      const matchesType = typeFilter === 'all' || t.type === typeFilter;
-      const matchesCategory = categoryFilter === 'all' || t.category.toLowerCase() === categoryFilter.toLowerCase();
-      return matchesSearch && matchesType && matchesCategory;
-    });
-  }, [transactions, search, typeFilter, categoryFilter]);
+  // Debounce the search input so typing doesn't fire a request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(id);
+  }, [search]);
 
-  // Pagination bounds math
-  const totalItems = filteredTransactions.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  
-  const activePage = currentPage > totalPages ? totalPages : currentPage;
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPage = async () => {
+      try {
+        const params = new URLSearchParams({
+          page: String(currentPage),
+          limit: String(PAGE_SIZE),
+        });
+        if (debouncedSearch.trim()) params.set('search', debouncedSearch.trim());
+        if (typeFilter !== 'all') params.set('type', typeFilter);
+        if (categoryFilter !== 'all') params.set('category', categoryFilter);
+        const res = await apiFetch(`/api/transactions?${params.toString()}`);
+        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        // The endpoint returns a paginated envelope when page/limit are set.
+        const list = Array.isArray(data) ? data : (data.transactions || []);
+        const totalCount = Array.isArray(data) ? list.length : (data.total || 0);
+        const pages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+        if (currentPage > pages && totalCount > 0) {
+          // Current page no longer exists (e.g. items were deleted) —
+          // step back to the last valid page and refetch.
+          setCurrentPage(pages);
+          return;
+        }
+        setRows(list);
+        setTotal(totalCount);
+      } catch (err) {
+        if (!cancelled) console.error('Error fetching transactions:', err);
+      }
+    };
+    fetchPage();
+    return () => { cancelled = true; };
+  }, [currentPage, debouncedSearch, typeFilter, categoryFilter, refreshKey]);
 
-  const startIndex = (activePage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalItems);
-  const pageItems = filteredTransactions.slice(startIndex, endIndex);
+  // Pagination bounds math (server-provided total)
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const activePage = Math.min(currentPage, totalPages);
+
+  const startIndex = (activePage - 1) * PAGE_SIZE;
 
   const handleSearchChange = (e) => {
     setSearch(e.target.value);
@@ -96,7 +133,7 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
               </tr>
             </thead>
             <tbody>
-              {pageItems.map((t, idx) => (
+              {rows.map((t, idx) => (
                 <tr key={t._id || idx}>
                   <td>{formatDate(t.date)}</td>
                   <td>{t.description}</td>
@@ -122,7 +159,7 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
                   </td>
                 </tr>
               ))}
-              {pageItems.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                     No matching transactions found.
@@ -136,8 +173,8 @@ export default function Transactions({ transactions, formatCurrency, formatDate,
         {/* Pagination Row */}
         <div className="pagination-controls">
           <span className="pagination-info">
-            {totalItems > 0
-              ? `Showing ${startIndex + 1}-${endIndex} of ${totalItems} transactions`
+            {total > 0
+              ? `Showing ${startIndex + 1}-${startIndex + rows.length} of ${total} transactions`
               : 'No transactions to display'}
           </span>
           <div className="pagination-buttons">

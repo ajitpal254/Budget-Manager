@@ -1,19 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Dashboard from './components/Dashboard';
 import Transactions from './components/Transactions';
 import Budgets from './components/Budgets';
 import Goals from './components/Goals';
 import Auth from './components/Auth';
+import ErrorBoundary from './components/ErrorBoundary';
+import { DashboardSkeleton, TransactionsSkeleton, GridSkeleton } from './components/Skeletons';
+import { computeBudgetStatus } from './budgetAlerts.js';
+import { shouldShowPushPrompt, dismissPushPrompt, enablePushNotifications } from './pushNotifications.js';
 import { apiFetch, getCookie } from './api.js';
 
 export default function App() {
   // State variables
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  // True only while the first data fetch after sign-in runs; drives skeletons.
+  const [initialLoading, setInitialLoading] = useState(false);
   const [tab, setTab] = useState('dashboard');
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [goals, setGoals] = useState([]);
+  // Bumped after every transaction mutation so the Transactions ledger
+  // (which pages on the server) refetches its current page.
+  const [txRefreshKey, setTxRefreshKey] = useState(0);
   const [dbStatus, setDbStatus] = useState('connecting');
 
   // Modals state
@@ -21,9 +30,107 @@ export default function App() {
   const [budgetModal, setBudgetModal] = useState({ open: false, data: null });
   const [goalModal, setGoalModal] = useState({ open: false, mode: 'add', data: null });
 
+  // Toast notifications: [{ id, type: 'success' | 'error', message }]
+  const [toasts, setToasts] = useState([]);
+  const pushToast = (type, message) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
+  const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  // Tracks per-budget alert status across data loads so toasts fire only
+  // when a threshold is newly crossed, not on every refresh.
+  const prevBudgetStatuses = useRef({});
+  const alertsInitialized = useRef(false);
+
+  const checkBudgetAlerts = (nextBudgets, nextTransactions) => {
+    const statuses = computeBudgetStatus(nextBudgets, nextTransactions);
+    if (!alertsInitialized.current) {
+      // First load: record the current state silently instead of toasting for it.
+      alertsInitialized.current = true;
+    } else {
+      statuses.forEach(s => {
+        const key = s.budget._id || s.budget.category;
+        const prev = prevBudgetStatuses.current[key];
+        if (prev !== s.status && s.status !== 'ok') {
+          pushToast(
+            s.status === 'danger' ? 'error' : 'warning',
+            s.status === 'danger'
+              ? `Budget alert: "${s.budget.category}" is over its limit.`
+              : `Budget alert: "${s.budget.category}" has used ${Math.round(s.percent)}% of its limit.`
+          );
+        }
+      });
+    }
+    const next = {};
+    statuses.forEach(s => { next[s.budget._id || s.budget.category] = s.status; });
+    prevBudgetStatuses.current = next;
+  };
+
+  // Generic confirmation dialog (used for deletes)
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null
+  });
+  const askConfirm = ({ title, message, confirmLabel = 'Delete', onConfirm }) =>
+    setConfirmDialog({ open: true, title, message, confirmLabel, onConfirm });
+  const closeConfirm = () => setConfirmDialog(d => ({ ...d, open: false, onConfirm: null }));
+
+  // Per-form submit state (prevents double-submits, drives button labels)
+  const [saving, setSaving] = useState({ tx: false, budget: false, goal: false });
+
+  // Push-notification opt-in banner: shown once to signed-in users on
+  // browsers that support Web Push, until they decide.
+  const [pushBannerVisible, setPushBannerVisible] = useState(false);
+  const [enablingPush, setEnablingPush] = useState(false);
+
+  useEffect(() => {
+    if (user && shouldShowPushPrompt()) {
+      setPushBannerVisible(true);
+    } else {
+      setPushBannerVisible(false);
+    }
+  }, [user]);
+
+  const handleEnablePush = async () => {
+    if (enablingPush) return;
+    setEnablingPush(true);
+    try {
+      const result = await enablePushNotifications();
+      pushToast(result.ok ? 'success' : 'error', result.message);
+    } catch (err) {
+      console.error('Push opt-in failed:', err);
+      pushToast('error', 'Could not enable notifications. Please try again.');
+    } finally {
+      setEnablingPush(false);
+      setPushBannerVisible(false);
+    }
+  };
+
+  const handleDismissPush = () => {
+    dismissPushPrompt();
+    setPushBannerVisible(false);
+  };
+
   // Initial load
   useEffect(() => {
     checkAuth();
+  }, []);
+
+  // Close any open modal/dialog with the Escape key
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setTxModal({ open: false, mode: 'add', data: null });
+        setBudgetModal({ open: false, data: null });
+        setGoalModal({ open: false, mode: 'add', data: null });
+        setConfirmDialog(d => ({ ...d, open: false, onConfirm: null }));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const checkAuth = async () => {
@@ -34,7 +141,7 @@ export default function App() {
         setUser(data.user);
         setDbStatus('connected');
         // Fetch data
-        await fetchInitialData();
+        await loadInitialData();
       } else {
         setUser(null);
         setDbStatus('connected');
@@ -57,22 +164,41 @@ export default function App() {
         apiFetch('/api/goals')
       ]);
 
+      let txs = [];
+      let bds = [];
       if (txRes.ok) {
-        const txs = await txRes.json();
+        txs = await txRes.json();
         setTransactions(txs);
+        setTxRefreshKey(k => k + 1);
       }
-      
-      if (budgetRes.ok) setBudgets(await budgetRes.json());
+
+      if (budgetRes.ok) {
+        bds = await budgetRes.json();
+        setBudgets(bds);
+      }
       if (goalRes.ok) setGoals(await goalRes.json());
+
+      checkBudgetAlerts(bds, txs);
     } catch (err) {
       console.error('Error fetching backend data:', err);
+    }
+  };
+
+  // First data fetch after sign-in: shows skeleton placeholders instead of
+  // a blank wait. Later refetches (after CRUD) update silently.
+  const loadInitialData = async () => {
+    setInitialLoading(true);
+    try {
+      await fetchInitialData();
+    } finally {
+      setInitialLoading(false);
     }
   };
 
   // --- AUTH HANDLERS ---
   const handleAuthSuccess = (userData) => {
     setUser(userData);
-    fetchInitialData();
+    loadInitialData();
   };
 
   const handleLogout = async () => {
@@ -86,11 +212,29 @@ export default function App() {
     } catch (err) {
       console.error('Logout request failed:', err);
     }
+    // Reset all app state instead of reloading the page, so the PWA shell
+    // stays alive and there is no flash. The Auth view renders once user
+    // is null.
     setUser(null);
+    setTab('dashboard');
     setTransactions([]);
     setBudgets([]);
     setGoals([]);
-    window.location.reload(); // Hard reload page to clear state/caches completely
+    setTxModal({ open: false, mode: 'add', data: null });
+    setBudgetModal({ open: false, data: null });
+    setGoalModal({ open: false, mode: 'add', data: null });
+    setConfirmDialog({ open: false, title: '', message: '', confirmLabel: 'Delete', onConfirm: null });
+    setToasts([]);
+    setDbStatus('connecting');
+    prevBudgetStatuses.current = {};
+    alertsInitialized.current = false;
+    // The logout cleared the CSRF cookie; fetch a fresh guest token so the
+    // login/register form can submit again without a page reload.
+    try {
+      await apiFetch('/api/auth/csrf-token');
+    } catch (err) {
+      console.error('CSRF token refresh failed:', err);
+    }
   };
 
   // --- HELPER FORMATTERS ---
@@ -114,6 +258,8 @@ export default function App() {
   // --- TRANSACTION CRUD ---
   const handleTxSubmit = async (e) => {
     e.preventDefault();
+    if (saving.tx) return;
+    setSaving(s => ({ ...s, tx: true }));
     const formData = new FormData(e.target);
     const id = formData.get('id');
     const payload = {
@@ -148,26 +294,46 @@ export default function App() {
       if (res.ok) {
         setTxModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
+        pushToast('success', id ? 'Transaction updated.' : 'Transaction added.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save transaction.');
       }
     } catch (err) {
       console.error('Error saving transaction:', err);
+      pushToast('error', 'Could not save transaction. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, tx: false }));
     }
   };
 
-  const handleTxDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/transactions/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleTxDelete = (id) => {
+    const t = transactions.find(tx => tx._id === id);
+    askConfirm({
+      title: 'Delete transaction?',
+      message: `This will permanently delete "${t?.description || 'this transaction'}"${t ? ` (${formatCurrency(t.amount)})` : ''}. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/transactions/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Transaction deleted.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not delete transaction.');
+          }
+        } catch (err) {
+          console.error('Error deleting transaction:', err);
+          pushToast('error', 'Could not delete transaction. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting transaction:', err);
-    }
+    });
   };
 
   const handleTxEditTrigger = (t) => {
@@ -177,6 +343,8 @@ export default function App() {
   // --- BUDGETS CRUD ---
   const handleBudgetSubmit = async (e) => {
     e.preventDefault();
+    if (saving.budget) return;
+    setSaving(s => ({ ...s, budget: true }));
     const formData = new FormData(e.target);
     const payload = {
       category: formData.get('category').trim(),
@@ -196,31 +364,53 @@ export default function App() {
       if (res.ok) {
         setBudgetModal({ open: false, data: null });
         await fetchInitialData();
+        pushToast('success', `Budget for "${payload.category}" saved.`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save budget.');
       }
     } catch (err) {
       console.error('Error saving budget:', err);
+      pushToast('error', 'Could not save budget. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, budget: false }));
     }
   };
 
-  const handleBudgetDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/budgets/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleBudgetDelete = (id) => {
+    const b = budgets.find(budget => budget._id === id);
+    askConfirm({
+      title: 'Remove budget?',
+      message: `This will remove the budget limit for "${b?.category || 'this category'}". Your transactions will not be affected.`,
+      confirmLabel: 'Remove',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/budgets/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Budget removed.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not remove budget.');
+          }
+        } catch (err) {
+          console.error('Error deleting budget:', err);
+          pushToast('error', 'Could not remove budget. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting budget:', err);
-    }
+    });
   };
 
   // --- GOALS CRUD ---
   const handleGoalSubmit = async (e) => {
     e.preventDefault();
+    if (saving.goal) return;
+    setSaving(s => ({ ...s, goal: true }));
     const formData = new FormData(e.target);
     const id = formData.get('id');
     const deadlineVal = formData.get('deadline');
@@ -255,26 +445,46 @@ export default function App() {
       if (res.ok) {
         setGoalModal({ open: false, mode: 'add', data: null });
         await fetchInitialData();
+        pushToast('success', id ? 'Goal updated.' : 'Goal created.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not save goal.');
       }
     } catch (err) {
       console.error('Error saving goal:', err);
+      pushToast('error', 'Could not save goal. Check your connection.');
+    } finally {
+      setSaving(s => ({ ...s, goal: false }));
     }
   };
 
-  const handleGoalDelete = async (id) => {
-    try {
-      const res = await apiFetch(`/api/goals/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'x-csrf-token': getCookie('csrfToken')
+  const handleGoalDelete = (id) => {
+    const g = goals.find(goal => goal._id === id);
+    askConfirm({
+      title: 'Remove goal?',
+      message: `This will permanently remove the "${g?.name || 'this'}" savings goal. This cannot be undone.`,
+      confirmLabel: 'Remove',
+      onConfirm: async () => {
+        try {
+          const res = await apiFetch(`/api/goals/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'x-csrf-token': getCookie('csrfToken')
+            }
+          });
+          if (res.ok) {
+            await fetchInitialData();
+            pushToast('success', 'Goal removed.');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            pushToast('error', data.error || 'Could not remove goal.');
+          }
+        } catch (err) {
+          console.error('Error deleting goal:', err);
+          pushToast('error', 'Could not remove goal. Check your connection.');
         }
-      });
-      if (res.ok) {
-        await fetchInitialData();
       }
-    } catch (err) {
-      console.error('Error deleting goal:', err);
-    }
+    });
   };
 
   const handleGoalEditTrigger = (g) => {
@@ -357,6 +567,22 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="main-content">
+        {pushBannerVisible && (
+          <div className="push-banner glass-card" role="region" aria-label="Notification opt-in">
+            <div className="push-banner-text">
+              <strong>Get budget alerts on this device</strong>
+              <span>We&apos;ll notify you when a category hits 80% or 100% of its budget.</span>
+            </div>
+            <div className="push-banner-actions">
+              <button className="btn btn-primary" onClick={handleEnablePush} disabled={enablingPush}>
+                {enablingPush ? 'Enabling…' : 'Enable'}
+              </button>
+              <button className="btn btn-text" onClick={handleDismissPush}>
+                Not now
+              </button>
+            </div>
+          </div>
+        )}
         <header className="top-bar">
           <h1>{getPageTitle()}</h1>
           <div className="action-group" style={{ display: 'flex', gap: '0.5rem' }}>
@@ -371,42 +597,63 @@ export default function App() {
           </div>
         </header>
 
-        {/* Tab content switching */}
-        {tab === 'dashboard' && (
-          <Dashboard
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            setTab={setTab}
-          />
-        )}
-        {tab === 'transactions' && (
-          <Transactions
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            onEdit={handleTxEditTrigger}
-            onDelete={handleTxDelete}
-          />
-        )}
-        {tab === 'budgets' && (
-          <Budgets
-            budgets={budgets}
-            transactions={transactions}
-            formatCurrency={formatCurrency}
-            onAddTrigger={() => setBudgetModal({ open: true, data: null })}
-            onDelete={handleBudgetDelete}
-          />
-        )}
-        {tab === 'goals' && (
-          <Goals
-            goals={goals}
-            formatCurrency={formatCurrency}
-            formatDate={formatDate}
-            onAddTrigger={() => setGoalModal({ open: true, mode: 'add', data: null })}
-            onEdit={handleGoalEditTrigger}
-            onDelete={handleGoalDelete}
-          />
+        {/* Tab content switching.
+            Skeletons show during the first data fetch; each tab is wrapped
+            in its own error boundary so one crashing widget can't blank
+            the whole app. */}
+        {initialLoading ? (
+          tab === 'dashboard' ? <DashboardSkeleton /> :
+          tab === 'transactions' ? <TransactionsSkeleton /> :
+          <GridSkeleton />
+        ) : (
+          <>
+            {tab === 'dashboard' && (
+              <ErrorBoundary key="dashboard">
+                <Dashboard
+                  transactions={transactions}
+                  budgets={budgets}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  setTab={setTab}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'transactions' && (
+              <ErrorBoundary key="transactions">
+                <Transactions
+                  transactions={transactions}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  onEdit={handleTxEditTrigger}
+                  onDelete={handleTxDelete}
+                  refreshKey={txRefreshKey}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'budgets' && (
+              <ErrorBoundary key="budgets">
+                <Budgets
+                  budgets={budgets}
+                  transactions={transactions}
+                  formatCurrency={formatCurrency}
+                  onAddTrigger={() => setBudgetModal({ open: true, data: null })}
+                  onDelete={handleBudgetDelete}
+                />
+              </ErrorBoundary>
+            )}
+            {tab === 'goals' && (
+              <ErrorBoundary key="goals">
+                <Goals
+                  goals={goals}
+                  formatCurrency={formatCurrency}
+                  formatDate={formatDate}
+                  onAddTrigger={() => setGoalModal({ open: true, mode: 'add', data: null })}
+                  onEdit={handleGoalEditTrigger}
+                  onDelete={handleGoalDelete}
+                />
+              </ErrorBoundary>
+            )}
+          </>
         )}
       </main>
 
@@ -512,8 +759,8 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setTxModal({ open: false, mode: 'add', data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save
+              <button type="submit" className="btn btn-primary" disabled={saving.tx}>
+                {saving.tx ? 'Saving…' : 'Save'}
               </button>
             </div>
           </form>
@@ -554,8 +801,8 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setBudgetModal({ open: false, data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save Budget
+              <button type="submit" className="btn btn-primary" disabled={saving.budget}>
+                {saving.budget ? 'Saving…' : 'Save Budget'}
               </button>
             </div>
           </form>
@@ -622,12 +869,47 @@ export default function App() {
               <button type="button" className="btn btn-secondary" onClick={() => setGoalModal({ open: false, mode: 'add', data: null })}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                Save Goal
+              <button type="submit" className="btn btn-primary" disabled={saving.goal}>
+                {saving.goal ? 'Saving…' : 'Save Goal'}
               </button>
             </div>
           </form>
         </div>
+      </div>
+
+      {/* Delete confirmation dialog */}
+      <div className={`modal ${confirmDialog.open ? 'show' : ''}`} role="dialog" aria-hidden={!confirmDialog.open}>
+        <div className="modal-content glass-card" style={{ maxWidth: '420px' }}>
+          <div className="modal-header">
+            <h3>{confirmDialog.title}</h3>
+            <button className="btn-close" onClick={closeConfirm}>&times;</button>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: 1.6, margin: 0 }}>
+            {confirmDialog.message}
+          </p>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={closeConfirm}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => { closeConfirm(); if (confirmDialog.onConfirm) confirmDialog.onConfirm(); }}
+            >
+              {confirmDialog.confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Toast notifications */}
+      <div className="toast-container" aria-live="polite">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast toast-${t.type}`} onClick={() => dismissToast(t.id)}>
+            <span className="toast-dot" />
+            <span>{t.message}</span>
+          </div>
+        ))}
       </div>
 
     </div>

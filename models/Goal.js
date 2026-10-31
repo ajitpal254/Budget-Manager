@@ -29,4 +29,7 @@ const goalSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Goals are always listed per user.
+goalSchema.index({ userId: 1 });
+
 module.exports = mongoose.model('Goal', goalSchema);

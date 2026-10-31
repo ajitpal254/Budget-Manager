@@ -265,8 +265,71 @@ h1 {
   border: none;
 }
 
+.btn-danger {
+  background: var(--danger-color);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
+}
+
+.btn-danger:hover {
+  opacity: 0.95;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+}
+
+/* Toast notifications */
+.toast-container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: min(360px, calc(100vw - 3rem));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: 0.75rem;
+  background: rgba(20, 24, 40, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  animation: toastSlideIn 0.25s ease-out;
+}
+
+.toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.toast-success .toast-dot { background: var(--success-color); }
+.toast-error .toast-dot { background: var(--danger-color); }
+
+@keyframes toastSlideIn {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 .btn-text:hover {
   color: var(--text-primary);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
 }
 
 /* Metric Display Cards Grid */
@@ -1083,4 +1146,116 @@ input:focus, select:focus {
   .top-bar {
     margin-bottom: 1.5rem;
   }
+}
+
+/* ---------- UX improvements: skeletons, alert badges, warning toasts ---------- */
+
+/* Loading skeletons */
+.skeleton-block {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.08) 25%,
+    rgba(148, 163, 184, 0.2) 50%,
+    rgba(148, 163, 184, 0.08) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Budget alert badges (Budgets view + Dashboard summary) */
+.alert-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.alert-warning {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.alert-danger {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+/* Warning toast variant (joins the existing success/error types) */
+.toast-warning .toast-dot { background: #f59e0b; }
+
+/* Dashboard budget-alerts summary card */
+.budget-alerts-card {
+  margin-bottom: 1.5rem;
+}
+
+.budget-alerts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.budget-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.budget-alert-text {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  flex: 1;
+  min-width: 140px;
+}
+
+/* Monthly trends chart card */
+.trends-card {
+  margin-top: 1.5rem;
+}
+
+/* Push-notification opt-in banner */
+.push-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 1.25rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+.push-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.push-banner-text strong {
+  font-size: 0.95rem;
+}
+
+.push-banner-text span {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.push-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
