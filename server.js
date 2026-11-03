@@ -77,7 +77,8 @@ app.use('/api', csrfMiddleware);
 app.use('/api', apiRoutes);
 
 // Catch-all route to serve the SPA
-app.get('*', (req, res) => {
+// NOTE: Express 5 requires named wildcards — bare '*' throws a PathError.
+app.get('/*splat', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
