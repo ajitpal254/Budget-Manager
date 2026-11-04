@@ -1,6 +1,7 @@
 const Session = require('../models/Session');
 const User = require('../models/User');
 const { hashToken } = require('../lib/tokens');
+const logger = require('../lib/logger');
 
 // Helper to manually parse cookies
 const parseCookies = (cookieHeader) => {
@@ -90,7 +91,7 @@ const authMiddleware = async (req, res, next) => {
     req.session = session;
     next();
   } catch (err) {
-    console.error('Auth middleware error:', err);
+    (req.log || logger).error({ err }, 'Auth middleware error');
     res.status(500).json({ error: 'An error occurred during authentication.' });
   }
 };

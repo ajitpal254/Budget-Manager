@@ -606,6 +606,30 @@ export default function App() {
     });
   };
 
+  // --- BUDGET ROLLOVER TOGGLE ---
+  const handleBudgetRolloverToggle = async (id, rollover) => {
+    try {
+      const res = await apiFetch(`/api/budgets/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrfToken')
+        },
+        body: JSON.stringify({ rollover })
+      });
+      if (res.ok) {
+        await fetchInitialData();
+        pushToast('success', rollover ? 'Rollover enabled for this budget.' : 'Rollover disabled.');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushToast('error', data.error || 'Could not update budget.');
+      }
+    } catch (err) {
+      console.error('Error toggling rollover:', err);
+      pushToast('error', 'Could not update budget. Check your connection.');
+    }
+  };
+
   // --- GOALS CRUD ---
   const handleGoalSubmit = async (e) => {
     e.preventDefault();
@@ -860,6 +884,7 @@ export default function App() {
                   formatCurrency={formatCurrency}
                   onAddTrigger={() => setBudgetModal({ open: true, data: null })}
                   onDelete={handleBudgetDelete}
+                  onToggleRollover={handleBudgetRolloverToggle}
                   warningPct={settings?.budgetWarningPct}
                   dangerPct={settings?.budgetDangerPct}
                 />

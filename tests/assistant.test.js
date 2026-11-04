@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const { answerQuestion } = require('../frontend/src/assistant.js');
 
 const DAY = 24 * 60 * 60 * 1000;
-const now = Date.now();
+// Anchor to the 15th of the current month so "this month" tests never flake
+// near a month boundary (e.g. on Nov 3, daysAgo(3) would be Oct 31 — last month).
+const now = new Date(new Date().getFullYear(), new Date().getMonth(), 15).getTime();
 const daysAgo = (n) => new Date(now - n * DAY).toISOString();
 
 const txs = [

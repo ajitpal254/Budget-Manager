@@ -1,8 +1,11 @@
 import React, { useMemo } from 'react';
 import TrendsChart from './TrendsChart';
 import InsightsCard from './InsightsCard';
+import ForecastCard from './ForecastCard';
+import CategoryTrends from './CategoryTrends';
 import { computeBudgetStatus } from '../budgetAlerts.js';
 import { generateInsights } from '../insights.js';
+import { apiFetch } from '../api';
 
 const categoryColors = [
   '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
@@ -34,6 +37,26 @@ export default function Dashboard({ transactions, budgets = [], formatCurrency, 
 
   // Chart math
   const expenseTransactions = transactions.filter(t => t.type === 'expense');
+
+  // Download this month's PDF money report (generated server-side).
+  const downloadReport = async () => {
+    try {
+      const res = await apiFetch('/api/reports/monthly');
+      if (!res.ok) throw new Error('report failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const now = new Date();
+      a.href = url;
+      a.download = `money-report-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('Could not generate the report. Please try again.');
+    }
+  };
   
   // Aggregate category spends
   const categorySpends = {};
@@ -213,6 +236,23 @@ export default function Dashboard({ transactions, budgets = [], formatCurrency, 
 
       {/* Monthly trends: income vs expenses over the last 6 months */}
       <TrendsChart transactions={transactions} formatCurrency={formatCurrency} />
+
+      {/* Cash-flow forecast from recurring transactions */}
+      <ForecastCard formatCurrency={formatCurrency} />
+
+      {/* Category trends: this month vs last month */}
+      <CategoryTrends transactions={transactions} formatCurrency={formatCurrency} />
+
+      {/* Monthly PDF report */}
+      <div className="card glass-card report-card">
+        <div>
+          <h3 className="card-title">📄 Monthly Report</h3>
+          <p className="card-subtitle">Totals, top categories and budget status as a PDF</p>
+        </div>
+        <button className="btn btn-secondary" onClick={downloadReport}>
+          Download PDF
+        </button>
+      </div>
     </div>
   );
 }

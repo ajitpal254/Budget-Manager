@@ -1,4 +1,5 @@
 const express = require('express');
+const logger = require('../lib/logger');
 const router = express.Router();
 const crypto = require('crypto');
 const multer = require('multer');
@@ -13,6 +14,10 @@ const RecurringTransaction = require('../models/RecurringTransaction');
 const { sendPushToUser } = require('../lib/push');
 const { hashToken } = require('../lib/tokens');
 const { runDueRecurring, isValidFrequency } = require('../lib/recurring');
+const { projectForecast } = require('../lib/forecast');
+const { computeRollover, monthKey } = require('../lib/rollover');
+const { sendDueBillReminders } = require('../lib/billReminders');
+const { buildMonthlyReport } = require('../lib/monthlyReport');
 const { parsePagination } = require('../lib/pagination');
 const { validateReceiptUpload, MAX_RECEIPT_BYTES } = require('../lib/receipts');
 const { authMiddleware, parseCookies, rateLimitMiddleware } = require('../middleware/auth');
@@ -210,8 +215,12 @@ router.post('/auth/login', rateLimitMiddleware(10, 15 * 60 * 1000), asyncHandler
   // Fire-and-forget: materialize any due recurring transactions so the
   // dashboard reflects them on this fresh sign-in. Never blocks the response.
   runDueRecurring(user._id).catch(err =>
-    console.error('Recurring generation on login failed:', err)
+    logger.error({ err }, 'Recurring generation on login failed')
   );
+
+  // Fire-and-forget: push a reminder for any recurring bill due in the next
+  // 3 days (deduped to one per bill per day; honors the user's setting).
+  sendDueBillReminders(user);
 
   res.json({
     user: {
@@ -263,7 +272,7 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   try {
     await runDueRecurring(req.user._id);
   } catch (err) {
-    console.error('Recurring generation on transactions load failed:', err);
+    logger.error({ err }, 'Recurring generation on transactions load failed');
   }
 
   const filter = { userId: req.user._id };
@@ -324,6 +333,26 @@ router.get('/transactions/export', authMiddleware, asyncHandler(async (req, res)
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   // BOM so Excel opens UTF-8 correctly.
   res.send('\uFEFF' + lines.join('\n'));
+}));
+
+// GET /api/reports/monthly (auth) — PDF summary of ?month (YYYY-MM, default
+// current): totals, spending by category, largest expenses, budget status.
+router.get('/reports/monthly', authMiddleware, asyncHandler(async (req, res) => {
+  const m = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : monthKey(new Date());
+  const [y, mo] = m.split('-').map(Number);
+  const start = new Date(y, mo - 1, 1);
+  const end = new Date(y, mo, 1);
+  const txs = await Transaction.find({
+    userId: req.user._id,
+    date: { $gte: start, $lt: end }
+  }).select('type category amount description date').sort({ date: 1 });
+  const budgets = await Budget.find({ userId: req.user._id });
+  const monthLabel = start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const pdf = await buildMonthlyReport({ monthLabel, transactions: txs, budgets });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="money-report-${m}.pdf"`);
+  res.setHeader('Content-Length', pdf.length);
+  res.send(pdf);
 }));
 
 // Checks whether a newly saved expense pushed its category's total spend
@@ -389,7 +418,7 @@ router.post('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   // notify the user's subscribed devices. Never blocks the response.
   if (saved.type === 'expense') {
     checkBudgetThreshold(saved).catch(err =>
-      console.error('Budget push check failed:', err)
+      logger.error({ err }, 'Budget push check failed')
     );
   }
 
@@ -565,6 +594,14 @@ router.delete('/recurring/:id', authMiddleware, asyncHandler(async (req, res) =>
   res.json({ message: 'Recurring transaction deleted successfully' });
 }));
 
+// GET /api/forecast (auth) — project recurring income/expenses per month for
+// the next N months (default 3, max 12). Read-only: never materializes.
+router.get('/forecast', authMiddleware, asyncHandler(async (req, res) => {
+  const months = Math.max(1, Math.min(12, parseInt(req.query.months, 10) || 3));
+  const recurring = await RecurringTransaction.find({ userId: req.user._id, active: true });
+  res.json(projectForecast(recurring, months));
+}));
+
 // --- BUDGETS (SCOPED TO AUTH USER) ---
 
 router.get('/budgets', authMiddleware, asyncHandler(async (req, res) => {
@@ -594,6 +631,43 @@ router.delete('/budgets/:id', authMiddleware, asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Budget not found' });
   }
   res.json({ message: 'Budget deleted successfully' });
+}));
+
+// PATCH /api/budgets/:id (auth + CSRF) — toggle the rollover flag (unspent
+// budget carries into next month). Accepts { rollover: boolean }.
+router.patch('/budgets/:id', authMiddleware, asyncHandler(async (req, res) => {
+  const { rollover } = req.body || {};
+  if (rollover !== true && rollover !== false) {
+    return res.status(400).json({ error: 'rollover must be true or false' });
+  }
+  const budget = await Budget.findOneAndUpdate(
+    { _id: req.params.id, userId: req.user._id },
+    { rollover },
+    { new: true, runValidators: true }
+  );
+  if (!budget) {
+    return res.status(404).json({ error: 'Budget not found' });
+  }
+  res.json(budget);
+}));
+
+// GET /api/budgets/rollover (auth) — unspent amounts carried into ?month
+// (YYYY-MM, default current month) for rollover-enabled budgets.
+// Returns { [category]: amount }.
+router.get('/budgets/rollover', authMiddleware, asyncHandler(async (req, res) => {
+  const m = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : monthKey(new Date());
+  const budgets = await Budget.find({ userId: req.user._id, rollover: true });
+  if (budgets.length === 0) return res.json({});
+  // Previous month's transactions only — the query is bounded and indexed.
+  const [y, mo] = m.split('-').map(Number);
+  const prevStart = new Date(y, mo - 2, 1);
+  const prevEnd = new Date(y, mo - 1, 1);
+  const txs = await Transaction.find({
+    userId: req.user._id,
+    type: 'expense',
+    date: { $gte: prevStart, $lt: prevEnd }
+  }).select('category amount date type');
+  res.json(computeRollover(budgets, txs, m));
 }));
 
 // --- GOALS (SCOPED TO AUTH USER) ---
@@ -759,14 +833,16 @@ router.get('/user/settings', authMiddleware, asyncHandler(async (req, res) => {
   const s = req.user.settings || {};
   res.json({
     budgetWarningPct: s.budgetWarningPct ?? 80,
-    budgetDangerPct: s.budgetDangerPct ?? 100
+    budgetDangerPct: s.budgetDangerPct ?? 100,
+    billReminders: s.billReminders ?? true
   });
 }));
 
-// PATCH /api/user/settings (auth + CSRF) — accepts one or both thresholds;
-// missing fields keep their current values. Warning must stay below danger.
+// PATCH /api/user/settings (auth + CSRF) — accepts thresholds and the bill
+// reminder toggle; missing fields keep their current values. Warning must
+// stay below danger.
 router.patch('/user/settings', authMiddleware, asyncHandler(async (req, res) => {
-  const { budgetWarningPct, budgetDangerPct } = req.body || {};
+  const { budgetWarningPct, budgetDangerPct, billReminders } = req.body || {};
   const cur = req.user.settings || {};
   const w = budgetWarningPct === undefined ? (cur.budgetWarningPct ?? 80) : Number(budgetWarningPct);
   const d = budgetDangerPct === undefined ? (cur.budgetDangerPct ?? 100) : Number(budgetDangerPct);
@@ -776,12 +852,18 @@ router.patch('/user/settings', authMiddleware, asyncHandler(async (req, res) => 
   if (!(w < d)) {
     return res.status(400).json({ error: 'Warning threshold must be less than the danger threshold.' });
   }
+  const set = { 'settings.budgetWarningPct': w, 'settings.budgetDangerPct': d };
+  let bill = cur.billReminders ?? true;
+  if (billReminders !== undefined) {
+    bill = billReminders === true || billReminders === 'true';
+    set['settings.billReminders'] = bill;
+  }
   await User.updateOne(
     { _id: req.user._id },
-    { $set: { 'settings.budgetWarningPct': w, 'settings.budgetDangerPct': d } },
+    { $set: set },
     { runValidators: true }
   );
-  res.json({ budgetWarningPct: w, budgetDangerPct: d });
+  res.json({ budgetWarningPct: w, budgetDangerPct: d, billReminders: bill });
 }));
 
 // POST /api/user/logout-all (auth + CSRF) — closes every session except the

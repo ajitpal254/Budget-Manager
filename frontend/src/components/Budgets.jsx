@@ -1,10 +1,35 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { computeBudgetStatus } from '../budgetAlerts.js';
+import { apiFetch } from '../api';
 
-export default function Budgets({ budgets, transactions, formatCurrency, onAddTrigger, onDelete, warningPct, dangerPct }) {
+export default function Budgets({ budgets, transactions, formatCurrency, onAddTrigger, onDelete, onToggleRollover, warningPct, dangerPct }) {
+  const [rollover, setRollover] = useState({});
+
+  // Rollover amounts carried into the current month (only for
+  // rollover-enabled budgets; {} when none).
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/budgets/rollover')
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((json) => {
+        if (!cancelled) setRollover(json || {});
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [budgets]);
+
+  // Effective budgets: limit + rollover carried in, so progress bars and
+  // alerts reflect what the user can actually spend this month.
+  const effectiveBudgets = budgets.map((b) => ({
+    ...b,
+    limit: b.limit + (b.rollover ? rollover[b.category] || 0 : 0)
+  }));
+
   // Per-category spend vs. limit, with warning/danger status from the
   // user's thresholds (80/100 defaults when unset)
-  const statuses = computeBudgetStatus(budgets, transactions, warningPct, dangerPct);
+  const statuses = computeBudgetStatus(effectiveBudgets, transactions, warningPct, dangerPct);
   const statusByCategory = {};
   statuses.forEach(s => { statusByCategory[s.budget.category] = s; });
 
@@ -36,7 +61,14 @@ export default function Budgets({ budgets, transactions, formatCurrency, onAddTr
             <div className="card glass-card budget-card" key={b._id || idx}>
               <div className="budget-meta">
                 <span className="budget-cat">{b.category}</span>
-                <span className="budget-limit-label">Limit: {formatCurrency(b.limit)}</span>
+                <span className="budget-limit-label">
+                  Limit: {formatCurrency(effectiveBudgets[idx].limit)}
+                  {b.rollover && (rollover[b.category] || 0) > 0 && (
+                    <span className="rollover-badge">
+                      {' '}(+{formatCurrency(rollover[b.category])} rolled over)
+                    </span>
+                  )}
+                </span>
               </div>
 
               {s.status !== 'ok' && (
@@ -66,6 +98,14 @@ export default function Budgets({ budgets, transactions, formatCurrency, onAddTr
               </div>
 
               <div className="budget-card-footer">
+                <label className="rollover-toggle">
+                  <input
+                    type="checkbox"
+                    checked={!!b.rollover}
+                    onChange={(e) => onToggleRollover(b._id, e.target.checked)}
+                  />
+                  <span>Rollover unspent</span>
+                </label>
                 <button className="btn btn-text text-danger" onClick={() => onDelete(b._id)}>
                   Remove
                 </button>
