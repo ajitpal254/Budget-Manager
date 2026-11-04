@@ -1562,3 +1562,111 @@ input:focus, select:focus {
   .assistant-fab { bottom: 5rem; right: 1rem; }
   .assistant-panel { right: 1rem; bottom: 6.75rem; }
 }
+
+/* --- New features (forecast, trends, report, rollover) --- */
+.card-subtitle {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin: -0.25rem 0 1rem;
+}
+
+.forecast-net-row {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.forecast-net-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.9rem;
+}
+
+.forecast-net-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.trend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.trend-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.trend-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.trend-name {
+  font-weight: 600;
+}
+
+.trend-amounts {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.trend-delta {
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.report-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.rollover-badge {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+
+.rollover-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.rollover-toggle input {
+  accent-color: #8b5cf6;
+  width: 1rem;
+  height: 1rem;
+}
+
+.settings-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.settings-checkbox-row input {
+  accent-color: #8b5cf6;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}

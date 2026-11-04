@@ -16,6 +16,10 @@ const budgetSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Budget limit is required'],
     min: [0.01, 'Limit must be greater than zero']
+  },
+  rollover: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

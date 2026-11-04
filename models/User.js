@@ -46,6 +46,10 @@ const userSchema = new mongoose.Schema({
         default: 100,
         min: [1, 'Danger threshold must be at least 1'],
         max: [100, 'Danger threshold cannot exceed 100']
+      },
+      billReminders: {
+        type: Boolean,
+        default: true
       }
     },
     default: () => ({}),

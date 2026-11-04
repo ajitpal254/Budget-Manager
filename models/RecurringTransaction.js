@@ -48,6 +48,10 @@ const recurringTransactionSchema = new mongoose.Schema({
   active: {
     type: Boolean,
     default: true
+  },
+  lastReminderSent: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true

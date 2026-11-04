@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const compression = require('compression');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
@@ -84,8 +85,23 @@ app.use((req, res, next) => {
   next();
 });
 
+// gzip/deflate responses (JSON, JS, CSS, HTML) — meaningful on slow mobile
+// connections. Mounted before the static file server so every response
+// benefits.
 // Serve frontend static assets from 'public' directory
+app.use(compression());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Liveness probe for the host (Render health checks, uptime monitors).
+// Intentionally before the rate limiter so monitoring never gets throttled.
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: Math.round(process.uptime()),
+    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    version: process.env.npm_package_version || null
+  });
+});
 
 // Secure API routes with rate limiter and CSRF middlewares
 app.use('/api', rateLimitMiddleware());

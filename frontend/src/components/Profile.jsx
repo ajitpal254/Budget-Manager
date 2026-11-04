@@ -115,6 +115,7 @@ export default function Profile({
   // --- Alert thresholds ---
   const [warningPct, setWarningPct] = useState(settings?.budgetWarningPct ?? 80);
   const [dangerPct, setDangerPct] = useState(settings?.budgetDangerPct ?? 100);
+  const [billReminders, setBillReminders] = useState(settings?.billReminders ?? true);
   const [savingSettings, setSavingSettings] = useState(false);
 
   // Sync local inputs once the settings arrive from the server.
@@ -122,6 +123,7 @@ export default function Profile({
     if (settings) {
       setWarningPct(settings.budgetWarningPct ?? 80);
       setDangerPct(settings.budgetDangerPct ?? 100);
+      setBillReminders(settings.billReminders ?? true);
     }
   }, [settings]);
 
@@ -339,6 +341,43 @@ export default function Profile({
           <button className="btn btn-primary" onClick={saveSettings} disabled={savingSettings}>
             {savingSettings ? 'Saving…' : 'Save thresholds'}
           </button>
+          <label className="settings-checkbox-row" style={{ marginTop: '1rem' }}>
+            <input
+              type="checkbox"
+              checked={billReminders}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setBillReminders(next);
+                try {
+                  const res = await apiFetch('/api/user/settings', {
+                    method: 'PATCH',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'x-csrf-token': getCookie('csrfToken')
+                    },
+                    body: JSON.stringify({ billReminders: next })
+                  });
+                  if (res.ok) {
+                    onSettingsSaved({ ...(settings || {}), billReminders: next });
+                    pushToast('success', next ? 'Bill reminders enabled.' : 'Bill reminders disabled.');
+                  } else {
+                    setBillReminders(!next);
+                    pushToast('error', 'Could not save setting.');
+                  }
+                } catch (err) {
+                  console.error('Bill reminder toggle failed:', err);
+                  setBillReminders(!next);
+                  pushToast('error', 'Could not save setting. Check your connection.');
+                }
+              }}
+            />
+            <span>
+              <strong>Bill reminders</strong>
+              <span className="settings-hint" style={{ display: 'block' }}>
+                Notify me when a recurring bill is due within 3 days.
+              </span>
+            </span>
+          </label>
         </section>
 
         <section className="card glass-card" aria-label="Push notifications">
