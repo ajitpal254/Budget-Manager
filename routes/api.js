@@ -1,4 +1,5 @@
 const express = require('express');
+const logger = require('../lib/logger');
 const router = express.Router();
 const crypto = require('crypto');
 const multer = require('multer');
@@ -210,7 +211,7 @@ router.post('/auth/login', rateLimitMiddleware(10, 15 * 60 * 1000), asyncHandler
   // Fire-and-forget: materialize any due recurring transactions so the
   // dashboard reflects them on this fresh sign-in. Never blocks the response.
   runDueRecurring(user._id).catch(err =>
-    console.error('Recurring generation on login failed:', err)
+    logger.error({ err }, 'Recurring generation on login failed')
   );
 
   res.json({
@@ -263,7 +264,7 @@ router.get('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   try {
     await runDueRecurring(req.user._id);
   } catch (err) {
-    console.error('Recurring generation on transactions load failed:', err);
+    logger.error({ err }, 'Recurring generation on transactions load failed');
   }
 
   const filter = { userId: req.user._id };
@@ -389,7 +390,7 @@ router.post('/transactions', authMiddleware, asyncHandler(async (req, res) => {
   // notify the user's subscribed devices. Never blocks the response.
   if (saved.type === 'expense') {
     checkBudgetThreshold(saved).catch(err =>
-      console.error('Budget push check failed:', err)
+      logger.error({ err }, 'Budget push check failed')
     );
   }
 
